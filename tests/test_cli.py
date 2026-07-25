@@ -117,8 +117,22 @@ def test_list_usage_flag_shows_usage_line(tmp_path, monkeypatch, capsys):
     )
     cli.main(["list", "--usage"])
     out = capsys.readouterr().out
-    assert "55% used" in out
+    assert "55%" in out
     assert "ChatGPT Plus" in out
+
+
+def test_format_usage_shows_days_and_reset_time(monkeypatch):
+    monkeypatch.setattr(cli.time, "time", lambda: 1_751_310_000)
+    output = cli._format_usage(
+        UsageSnapshot(
+            available=True,
+            used_percent=5,
+            reset_at=(1_751_310_000 + 7 * 86_400) * 1000,
+        )
+    )
+
+    assert output.startswith("  usage: 7d 5% @")
+    assert ", " in output
 
 
 def test_list_usage_flag_never_prints_secrets(tmp_path, monkeypatch, capsys):

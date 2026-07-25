@@ -8,8 +8,10 @@ the plan's stated CLI redaction policy.
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 import time
+from datetime import datetime
 
 from opencode_swap import __version__, backup, opencode_auth, paths, process_detection
 from opencode_swap.exceptions import AuthFileError, OpenCodeSwapError, SchemaError
@@ -108,13 +110,6 @@ def cmd_list(switcher: Switcher, args: argparse.Namespace) -> int:
     return 0
 
 
-def _format_duration(seconds: float) -> str:
-    seconds = max(0, int(seconds))
-    hours, remainder = divmod(seconds, 3600)
-    minutes = remainder // 60
-    return f"{hours}h{minutes}m" if hours else f"{minutes}m"
-
-
 def _format_usage(snapshot: UsageSnapshot | None) -> str:
     if snapshot is None:
         return "  usage: n/a"
@@ -122,9 +117,11 @@ def _format_usage(snapshot: UsageSnapshot | None) -> str:
         return f"  usage: unavailable ({snapshot.message})"
     if snapshot.used_percent is None:
         return "  usage: n/a"
-    parts = [f"{snapshot.used_percent:.0f}% used"]
+    parts = [f"{snapshot.used_percent:.0f}%"]
     if snapshot.reset_at is not None:
-        parts.append(f"resets in {_format_duration((snapshot.reset_at - time.time() * 1000) / 1000)}")
+        days = math.ceil(max(0, snapshot.reset_at - time.time() * 1000) / 86_400_000)
+        reset_time = datetime.fromtimestamp(snapshot.reset_at / 1000)
+        parts[0] = f"{days}d {parts[0]} @{reset_time:%b} {reset_time.day}, {reset_time:%H:%M}"
     if snapshot.plan_name:
         parts.append(snapshot.plan_name)
     return "  usage: " + ", ".join(parts)
