@@ -84,6 +84,12 @@ repos:
           - markdownlint-rule-table-format@1.0.3
   - repo: local
     hooks:
+      - id: pytest
+        name: pytest
+        entry: uv run pytest -q
+        language: system
+        pass_filenames: false
+        files: ^(src|tests)/.*\.py$
       - id: shellcheck
         name: shellcheck
         entry: shellcheck
