@@ -164,14 +164,14 @@ def test_remove_unknown_account_raises(switcher):
 def test_rename_account_moves_secret(switcher):
     write_auth(switcher.opencode_auth_path, oauth_entry(account_id="acct-1"))
     switcher.add_account("work")
-    switcher.rename_account("work", "personal")
+    switcher.rename_account("work", "account@example.test")
 
     assert "work" not in switcher.registry.accounts()
-    assert "personal" in switcher.registry.accounts()
+    assert "account@example.test" in switcher.registry.accounts()
     assert switcher.secrets.get("openai:work") is None
-    stored = json.loads(switcher.secrets.get("openai:personal"))
+    stored = json.loads(switcher.secrets.get("openai:account@example.test"))
     assert stored["accountId"] == "acct-1"
-    assert switcher.registry.get_active() == "personal"
+    assert switcher.registry.get_active() == "account@example.test"
 
 
 def test_rename_unknown_raises(switcher):

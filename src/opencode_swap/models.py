@@ -8,11 +8,12 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import cast
 
-#: Account name validation: lowercase letters/digits/-/_/., non-empty, not
-#: leading '-' (argparse would read it as a flag) or '.' (keeps the file-
+#: Account name validation: lowercase letters/digits/-/_/./@/+, non-empty,
+#: not leading '-' (argparse would read it as a flag) or '.' (keeps the file-
 #: fallback secret-store filename derived from this name free of anything
-#: that could resemble a relative path component).
-_NAME_RE = re.compile(r"^[a-z0-9_.-]+$")
+#: that could resemble a relative path component). ``@`` and ``+`` support
+#: common email-address labels.
+_NAME_RE = re.compile(r"^[a-z0-9_.@+-]+$")
 
 type JsonObject = dict[str, object]
 
@@ -27,7 +28,7 @@ def normalize_account_name(name: str) -> str:
     if normalized.startswith("."):
         raise ValueError(f"account name '{name}' cannot start with '.'")
     if not _NAME_RE.match(normalized):
-        raise ValueError(f"account name '{name}' may only contain letters, digits, '-', '_', and '.'")
+        raise ValueError(f"account name '{name}' may only contain letters, digits, '-', '_', '.', '@', and '+'")
     return normalized
 
 

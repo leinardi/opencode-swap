@@ -12,7 +12,7 @@ dependencies = [
     # trigger a "wants to use your keychain" re-prompt.
     "keyring>=25.0.0; sys_platform == 'linux'",
 ]
-authors = [{email = "leinardi@gmail.com"}]
+authors = [{name = "roberto@leinardi.com"}]
 license = {text = "MIT"}
 keywords = ["opencode", "account-switcher", "cli"]
 classifiers = [

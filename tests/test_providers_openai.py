@@ -98,9 +98,9 @@ def test_identity_api_key():
 
 
 def test_describe_oauth_with_and_without_email():
-    with_email = provider.extract({"openai": oauth_entry(access=make_jwt({"chatgpt_account_id": "acct-1", "email": "a@x.com"}))})
+    with_email = provider.extract({"openai": oauth_entry(access=make_jwt({"chatgpt_account_id": "acct-1", "email": "a@example.test"}))})
     desc = provider.describe(with_email)
-    assert desc.email == "a@x.com"
+    assert desc.email == "a@example.test"
     assert desc.account_id == "acct-1"
 
     without_email = provider.extract({"openai": oauth_entry()})

@@ -11,6 +11,7 @@ from opencode_swap.models import normalize_account_name
         ("  personal  ", "personal"),
         ("acct.v2", "acct.v2"),
         ("my_account-1", "my_account-1"),
+        ("Account+Label@Example.Test", "account+label@example.test"),
     ],
 )
 def test_normalize_valid_names(raw, expected):
