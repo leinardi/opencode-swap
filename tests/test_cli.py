@@ -187,6 +187,27 @@ def test_use_switches_account(tmp_path, capsys):
     assert json.loads(auth_path(tmp_path).read_text())["openai"]["accountId"] == "acct-1"
 
 
+def test_switch_cycles_accounts_and_wraps(tmp_path, capsys):
+    write_live_account(tmp_path, account_id="acct-1")
+    cli.main(["add", "work"])
+    write_live_account(tmp_path, account_id="acct-2")
+    cli.main(["add", "personal"])
+    capsys.readouterr()
+
+    assert cli.main(["switch"]) == 0
+    assert "Switched to 'work'" in capsys.readouterr().out
+    assert json.loads(auth_path(tmp_path).read_text())["openai"]["accountId"] == "acct-1"
+
+    assert cli.main(["switch"]) == 0
+    assert "Switched to 'personal'" in capsys.readouterr().out
+    assert json.loads(auth_path(tmp_path).read_text())["openai"]["accountId"] == "acct-2"
+
+
+def test_switch_without_managed_active_account_fails_cleanly(capsys):
+    assert cli.main(["switch"]) == 1
+    assert "opencode-swap:" in capsys.readouterr().err
+
+
 def test_use_unknown_account_fails_cleanly(capsys):
     assert cli.main(["use", "ghost"]) == 1
     assert "opencode-swap:" in capsys.readouterr().err

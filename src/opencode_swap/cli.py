@@ -45,6 +45,9 @@ def _build_parser() -> argparse.ArgumentParser:
     use_p.add_argument("name", help="saved account name to activate")
     use_p.add_argument("-y", "--yes", action="store_true", help="don't prompt for confirmation")
 
+    switch_p = subparsers.add_parser("switch", help="switch to the next saved OpenAI account")
+    switch_p.add_argument("-y", "--yes", action="store_true", help="don't prompt for confirmation")
+
     remove_p = subparsers.add_parser("remove", help="remove a saved account")
     remove_p.add_argument("name", help="saved account name to remove")
     remove_p.add_argument("-y", "--yes", action="store_true", help="don't prompt for confirmation")
@@ -142,14 +145,28 @@ def cmd_current(switcher: Switcher, args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_use(switcher: Switcher, args: argparse.Namespace) -> int:
+def _can_switch(assume_yes: bool) -> bool:
     if process_detection.is_opencode_running() and not _confirm(
         "OpenCode appears to be running; switching now could race an in-flight token refresh.",
-        args.yes,
+        assume_yes,
     ):
         print("Aborted.", file=sys.stderr)
+        return False
+    return True
+
+
+def cmd_use(switcher: Switcher, args: argparse.Namespace) -> int:
+    if not _can_switch(args.yes):
         return 1
     meta = switcher.use_account(args.name)
+    print(f"Switched to '{meta.name}'.")
+    return 0
+
+
+def cmd_switch(switcher: Switcher, args: argparse.Namespace) -> int:
+    if not _can_switch(args.yes):
+        return 1
+    meta = switcher.use_account(switcher.next_account().name)
     print(f"Switched to '{meta.name}'.")
     return 0
 
@@ -221,6 +238,7 @@ _HANDLERS = {
     "list": cmd_list,
     "current": cmd_current,
     "use": cmd_use,
+    "switch": cmd_switch,
     "remove": cmd_remove,
     "rename": cmd_rename,
     "restore": cmd_restore,

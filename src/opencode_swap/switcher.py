@@ -325,6 +325,15 @@ class Switcher:
             return Validity.INVALID
         return PROVIDERS[meta.provider].validate(record)
 
+    def next_account(self, provider_id: str = "openai") -> AccountMeta:
+        """Return next saved account after the live managed account, wrapping around."""
+        current, _ = self.current(provider_id)
+        if current is None:
+            raise OpenCodeSwapError("current OpenCode account is not managed; use `opencode-swap use <name>` first")
+        accounts = self.registry.accounts()
+        names = sorted(name for name, meta in accounts.items() if meta.provider == provider_id)
+        return accounts[names[(names.index(current.name) + 1) % len(names)]]
+
     def current(self, provider_id: str = "openai") -> tuple[AccountMeta | None, AccountDesc | None]:
         """Return (managed account meta if recognized, live account description).
 

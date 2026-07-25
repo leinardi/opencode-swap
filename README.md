@@ -86,12 +86,13 @@ tokens in place — it won't create a duplicate.
 | `opencode-swap list` | List saved accounts, with an active marker, truncated account id, and expiry/validity flag. |
 | `opencode-swap current` | Show which saved account (if any) OpenCode is currently using. |
 | `opencode-swap use <name> [-y]` | Switch OpenCode's active OpenAI account to `<name>`. |
+| `opencode-swap switch [-y]` | Switch to next saved OpenAI account, wrapping around after the last account. |
 | `opencode-swap remove <name> [-y]` | Delete a saved account (from both the registry and the secret store). |
 | `opencode-swap rename <old> <new>` | Rename a saved account. |
 | `opencode-swap restore [--pristine] [-y]` | Recover `auth.json` from the most recent pre-switch backup, or from the very first snapshot ever taken (`--pristine`). |
 | `opencode-swap doctor` | Diagnose paths, schema compatibility, secret backend, and backup state. |
 
-`use`, `remove`, and `restore` ask for confirmation unless you pass `-y`/`--yes`
+`use`, `switch`, `remove`, and `restore` ask for confirmation unless you pass `-y`/`--yes`
 (and refuse to prompt at all on a non-interactive terminal — pass `-y` in
 scripts). `use` also warns if it detects a running `opencode` process, since
 switching while OpenCode might be mid-token-refresh is the one real race
