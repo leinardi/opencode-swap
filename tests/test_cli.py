@@ -320,6 +320,85 @@ def test_export_import_roundtrip_with_hidden_password(tmp_path, monkeypatch, cap
     assert "work" in cli.Switcher.default().registry.accounts()
 
 
+def test_export_offers_ocs_extension_for_extensionless_path(tmp_path, monkeypatch, capsys):
+    write_live_account(tmp_path, account_id="acct-1")
+    assert cli.main(["add", "work"]) == 0
+    archive = tmp_path / "accounts"
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(cli.getpass, "getpass", lambda prompt: "password")
+    monkeypatch.setattr("builtins.input", lambda _prompt: "")
+    capsys.readouterr()
+
+    assert cli.main(["export", str(archive)]) == 0
+
+    assert archive.with_suffix(".ocs").exists()
+    assert not archive.exists()
+    assert str(archive.with_suffix(".ocs")) in capsys.readouterr().out
+
+
+def test_export_keeps_extensionless_path_when_ocs_extension_declined(tmp_path, monkeypatch, capsys):
+    write_live_account(tmp_path, account_id="acct-1")
+    assert cli.main(["add", "work"]) == 0
+    archive = tmp_path / "accounts"
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(cli.getpass, "getpass", lambda prompt: "password")
+    monkeypatch.setattr("builtins.input", lambda _prompt: "n")
+    capsys.readouterr()
+
+    assert cli.main(["export", str(archive)]) == 0
+
+    assert archive.exists()
+    assert not archive.with_suffix(".ocs").exists()
+
+
+@pytest.mark.parametrize(
+    ("choice", "expected_count", "expected_ids"),
+    [
+        ("sa", 0, {"a": "old-a", "b": "old-b"}),
+        ("oa", 2, {"a": "new-a", "b": "new-b"}),
+    ],
+)
+def test_import_conflict_apply_to_all(  # noqa: PLR0913
+    choice, expected_count, expected_ids, tmp_path, monkeypatch, capsys
+):
+    for name in ("a", "b"):
+        write_live_account(tmp_path, account_id=f"old-{name}")
+        assert cli.main(["add", name]) == 0
+    entries = [
+        transfer.TransferEntry(
+            AccountMeta(name, "openai", "oauth", f"new-{name}", None, "2026-01-01T00:00:00Z"),
+            {
+                "type": "oauth",
+                "refresh": f"refresh-{name}",
+                "access": make_jwt({"chatgpt_account_id": f"new-{name}"}),
+                "expires": int((time.time() + 3600) * 1000),
+                "accountId": f"new-{name}",
+            },
+        )
+        for name in ("a", "b")
+    ]
+    archive = tmp_path / "accounts.ocs"
+    transfer.write_archive(archive, entries, "password")
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(cli.getpass, "getpass", lambda prompt: "password")
+    prompts = []
+
+    def choose(prompt):
+        prompts.append(prompt)
+        return choice
+
+    monkeypatch.setattr("builtins.input", choose)
+    capsys.readouterr()
+
+    assert cli.main(["import", str(archive)]) == 0
+
+    assert len(prompts) == 1
+    assert "[s/sa/o/oa/a]" in prompts[0]
+    assert f"Imported {expected_count} account" in capsys.readouterr().out
+    accounts = cli.Switcher.default().registry.accounts()
+    assert {name: accounts[name].account_id for name in ("a", "b")} == expected_ids
+
+
 def test_export_refuses_noninteractive_password_prompt(tmp_path, capsys):
     write_live_account(tmp_path)
     cli.main(["add", "work"])

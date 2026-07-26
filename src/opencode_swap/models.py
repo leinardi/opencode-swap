@@ -41,6 +41,14 @@ class Validity(Enum):
     INVALID = auto()
 
 
+class ImportConflictAction(Enum):
+    """Action selected when an imported account name already exists."""
+
+    SKIP = auto()
+    OVERWRITE = auto()
+    ABORT = auto()
+
+
 @dataclass(frozen=True)
 class AuthRecord:
     """A single provider's entry from OpenCode's auth.json.

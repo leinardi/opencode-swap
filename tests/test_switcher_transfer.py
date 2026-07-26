@@ -4,7 +4,7 @@ import pytest
 
 from opencode_swap import macos_keychain, transfer
 from opencode_swap.exceptions import AccountExistsError, OpenCodeSwapError, SchemaError
-from opencode_swap.models import AccountMeta, Platform
+from opencode_swap.models import AccountMeta, ImportConflictAction, Platform
 from opencode_swap.switcher import Switcher
 from tests.helpers import make_jwt
 from tests.test_switcher import oauth_entry, write_auth
@@ -89,6 +89,63 @@ def test_name_conflict_fails_before_any_changes(source, tmp_path):
     assert destination.secrets.get("openai:personal") is None
 
 
+def test_name_conflict_can_be_skipped_while_other_accounts_import(source, tmp_path):
+    archive = tmp_path / "accounts.ocs"
+    source.export_accounts(archive, "password")
+    destination = Switcher(tmp_path / "destination-auth.json", tmp_path / "destination-data", platform=Platform.UNKNOWN)
+    write_auth(destination.opencode_auth_path, oauth_entry(account_id="existing-work", refresh="existing-refresh"))
+    destination.add_account("work")
+
+    count = destination.import_accounts(archive, "password", lambda _name: ImportConflictAction.SKIP)
+
+    assert count == 1
+    assert set(destination.registry.accounts()) == {"personal", "work"}
+    assert json.loads(destination.secrets.get("openai:work"))["refresh"] == "existing-refresh"
+    assert json.loads(destination.secrets.get("openai:personal"))["refresh"] == "refresh-b"
+
+
+def test_name_conflict_can_be_overwritten(source, tmp_path):
+    archive = tmp_path / "accounts.ocs"
+    source.export_accounts(archive, "password")
+    destination = Switcher(tmp_path / "destination-auth.json", tmp_path / "destination-data", platform=Platform.UNKNOWN)
+    write_auth(destination.opencode_auth_path, oauth_entry(account_id="existing-work", refresh="existing-refresh"))
+    destination.add_account("work")
+
+    count = destination.import_accounts(archive, "password", lambda _name: ImportConflictAction.OVERWRITE)
+
+    assert count == 2
+    assert destination.registry.accounts()["work"].account_id == "acct-a"
+    assert json.loads(destination.secrets.get("openai:work"))["refresh"] == "refresh-a"
+
+
+def test_overwrite_repairs_registered_account_with_missing_secret(source, tmp_path):
+    archive = tmp_path / "accounts.ocs"
+    source.export_accounts(archive, "password")
+    destination = Switcher(tmp_path / "destination-auth.json", tmp_path / "destination-data", platform=Platform.UNKNOWN)
+    destination.registry.upsert_account(AccountMeta("work", "openai", "oauth", "lost", None, "2026-01-01T00:00:00Z"))
+
+    count = destination.import_accounts(archive, "password", lambda _name: ImportConflictAction.OVERWRITE)
+
+    assert count == 2
+    assert destination.registry.accounts()["work"].account_id == "acct-a"
+    assert json.loads(destination.secrets.get("openai:work"))["refresh"] == "refresh-a"
+
+
+def test_aborted_name_conflict_makes_no_changes(source, tmp_path):
+    archive = tmp_path / "accounts.ocs"
+    source.export_accounts(archive, "password")
+    destination = Switcher(tmp_path / "destination-auth.json", tmp_path / "destination-data", platform=Platform.UNKNOWN)
+    write_auth(destination.opencode_auth_path, oauth_entry(account_id="existing-work", refresh="existing-refresh"))
+    destination.add_account("work")
+
+    with pytest.raises(OpenCodeSwapError, match="import aborted"):
+        destination.import_accounts(archive, "password", lambda _name: ImportConflictAction.ABORT)
+
+    assert set(destination.registry.accounts()) == {"work"}
+    assert destination.secrets.get("openai:personal") is None
+    assert json.loads(destination.secrets.get("openai:work"))["refresh"] == "existing-refresh"
+
+
 def test_identity_conflict_under_different_name_fails_before_changes(source, tmp_path):
     archive = tmp_path / "accounts.ocs"
     source.export_accounts(archive, "password")
@@ -122,6 +179,26 @@ def test_import_write_failure_cleans_new_secrets_and_registry(source, tmp_path, 
     assert destination.registry.accounts() == {}
     assert destination.secrets.get("openai:personal") is None
     assert destination.secrets.get("openai:work") is None
+
+
+def test_import_registry_failure_restores_overwritten_secret(source, tmp_path, monkeypatch):
+    archive = tmp_path / "accounts.ocs"
+    source.export_accounts(archive, "password")
+    destination = Switcher(tmp_path / "destination-auth.json", tmp_path / "destination-data", platform=Platform.UNKNOWN)
+    write_auth(destination.opencode_auth_path, oauth_entry(account_id="existing-work", refresh="existing-refresh"))
+    destination.add_account("work")
+
+    def fail_registry(_metas):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(destination.registry, "upsert_accounts", fail_registry)
+
+    with pytest.raises(OSError, match="disk full"):
+        destination.import_accounts(archive, "password", lambda _name: ImportConflictAction.OVERWRITE)
+
+    assert set(destination.registry.accounts()) == {"work"}
+    assert destination.secrets.get("openai:personal") is None
+    assert json.loads(destination.secrets.get("openai:work"))["refresh"] == "existing-refresh"
 
 
 def test_import_routes_credentials_to_macos_keychain(source, tmp_path, monkeypatch):

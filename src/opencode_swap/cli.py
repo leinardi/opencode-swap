@@ -17,7 +17,7 @@ from pathlib import Path
 
 from opencode_swap import __version__, backup, opencode_auth, paths, process_detection
 from opencode_swap.exceptions import AuthFileError, OpenCodeSwapError, SchemaError
-from opencode_swap.models import Validity
+from opencode_swap.models import ImportConflictAction, Validity
 from opencode_swap.providers import PROVIDERS
 from opencode_swap.switcher import Switcher
 from opencode_swap.usage import UsageSnapshot
@@ -108,6 +108,22 @@ def _prompt_archive_password(*, confirm: bool) -> str:
         return password
     except EOFError as exc:
         raise OpenCodeSwapError("could not read archive password") from exc
+
+
+def _prompt_archive_extension(path: Path) -> Path:
+    """Offer the conventional archive extension only when none was supplied."""
+    if path.suffix:
+        return path
+    while True:
+        try:
+            answer = input(f"Export path '{path}' has no extension. Add .ocs? [Y/n] ").strip().lower()
+        except EOFError as exc:
+            raise OpenCodeSwapError("could not read archive extension choice") from exc
+        if answer in ("", "y", "yes"):
+            return path.with_name(f"{path.name}.ocs")
+        if answer in ("n", "no"):
+            return path
+        print("Enter yes or no.", file=sys.stderr)
 
 
 def cmd_add(switcher: Switcher, args: argparse.Namespace) -> int:
@@ -226,6 +242,7 @@ def cmd_rename(switcher: Switcher, args: argparse.Namespace) -> int:
 
 def cmd_export(switcher: Switcher, args: argparse.Namespace) -> int:
     path = Path(args.path).expanduser()
+    path = _prompt_archive_extension(path)
     count = switcher.export_accounts(path, _prompt_archive_password(confirm=True))
     print(f"Exported {count} account{'s' if count != 1 else ''} to {path}.")
     return 0
@@ -233,7 +250,39 @@ def cmd_export(switcher: Switcher, args: argparse.Namespace) -> int:
 
 def cmd_import(switcher: Switcher, args: argparse.Namespace) -> int:
     path = Path(args.path).expanduser()
-    count = switcher.import_accounts(path, _prompt_archive_password(confirm=False))
+    apply_to_all: ImportConflictAction | None = None
+
+    def resolve_conflict(name: str) -> ImportConflictAction:
+        nonlocal apply_to_all
+        if apply_to_all is not None:
+            return apply_to_all
+        choices = {
+            "s": ImportConflictAction.SKIP,
+            "skip": ImportConflictAction.SKIP,
+            "sa": ImportConflictAction.SKIP,
+            "skip-all": ImportConflictAction.SKIP,
+            "o": ImportConflictAction.OVERWRITE,
+            "overwrite": ImportConflictAction.OVERWRITE,
+            "oa": ImportConflictAction.OVERWRITE,
+            "overwrite-all": ImportConflictAction.OVERWRITE,
+            "a": ImportConflictAction.ABORT,
+            "abort": ImportConflictAction.ABORT,
+        }
+        while True:
+            try:
+                answer = (
+                    input(f"Account '{name}' already exists. Choose [s/sa/o/oa/a] (skip/skip-all/overwrite/overwrite-all/abort): ").strip().lower()
+                )
+            except EOFError as exc:
+                raise OpenCodeSwapError("could not read import conflict choice") from exc
+            action = choices.get(answer)
+            if action is not None:
+                if answer in ("sa", "skip-all", "oa", "overwrite-all"):
+                    apply_to_all = action
+                return action
+            print("Enter s, sa, o, oa, or a (full names also accepted).", file=sys.stderr)
+
+    count = switcher.import_accounts(path, _prompt_archive_password(confirm=False), resolve_conflict)
     print(f"Imported {count} account{'s' if count != 1 else ''}. Run `opencode-swap use <name>` to activate one.")
     return 0
 

@@ -299,6 +299,15 @@ class Registry:
             accounts[meta.name] = meta.to_dict()
         self._save(data)
 
+    def upsert_accounts(self, metas: list[AccountMeta]) -> None:
+        """Add or replace several accounts in one atomic registry publication."""
+        data = self._load()
+        accounts = data["accounts"]
+        assert isinstance(accounts, dict)
+        for meta in metas:
+            accounts[meta.name] = meta.to_dict()
+        self._save(data)
+
     def remove_account(self, name: str) -> None:
         data = self._load()
         accounts = data["accounts"]

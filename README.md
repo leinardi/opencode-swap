@@ -89,8 +89,8 @@ tokens in place — it won't create a duplicate.
 | `opencode-swap switch [-y]` | Switch to next saved OpenAI account, wrapping around after the last account. |
 | `opencode-swap remove <name> [-y]` | Delete a saved account (from both the registry and the secret store). |
 | `opencode-swap rename <old> <new>` | Rename a saved account. |
-| `opencode-swap export <path>` | Export all saved accounts to a new password-encrypted archive. |
-| `opencode-swap import <path>` | Import every account from an encrypted archive; refuses all name or identity conflicts. |
+| `opencode-swap export <path>` | Export all saved accounts to a new password-encrypted `.ocs` archive. |
+| `opencode-swap import <path>` | Import accounts from an encrypted archive; prompts to skip or overwrite existing names. |
 | `opencode-swap restore [--pristine] [-y]` | Recover `auth.json` from the most recent pre-switch backup, or from the very first snapshot ever taken (`--pristine`). |
 | `opencode-swap doctor` | Diagnose paths, schema compatibility, secret backend, and backup state. |
 
@@ -118,10 +118,16 @@ opencode-swap use personal
 `export` asks for a password twice; `import` asks for it once. Password input
 requires an interactive terminal and is never placed in command arguments or
 printed. The archive is AES-256 encrypted and created with `0600` permissions.
+When an export path has no extension, `export` asks whether to append `.ocs`
+(default: yes). Repositories using this project's `.gitignore` ignore `*.ocs`
+to reduce risk of accidentally committing an account archive.
 Import validates every account and checks all destination names and identities
-before writing anything. Any conflict aborts the whole import. Imported
-accounts go through the normal secret backend (macOS Keychain, Linux keyring,
-or file fallback), while the destination's active account and OpenCode
+before writing anything. For existing account names, it offers `skip`,
+`skip-all`, `overwrite`, `overwrite-all`, and `abort`. Identity conflicts under
+different names still abort because there is no unambiguous overwrite target.
+Use the shortcuts `s`, `sa`, `o`, `oa`, and `a`, respectively, at the prompt.
+Imported accounts go through the normal secret backend (macOS Keychain, Linux
+keyring, or file fallback), while the destination's active account and OpenCode
 `auth.json` remain unchanged. Delete the transfer archive after successful
 import. Use a strong, unique archive passphrase; archive security depends on
 its entropy. Export refuses if the live credential cannot be proven to match

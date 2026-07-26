@@ -210,14 +210,16 @@ be distinguished from a foreign login.
 
 `import <path>` decrypts in memory and strictly validates the archive version,
 manifest shape, provider schema, account names, record types, and duplicate
-identities. While holding `Switcher.lock`, it then preflights every destination
-name, identity, and unregistered secret key. Any conflict aborts before the
-first write. New secrets are written through `SecretStore`, followed by one
-atomic registry publication; a failure attempts to remove every newly written
-secret. Printable metadata is derived from validated records and filtered
-against credential fields from every account in the archive, preventing one
-account's token from entering another account's registry metadata. Import never
-changes OpenCode's live `auth.json` or the destination registry's active marker.
+identities. While holding `Switcher.lock`, it resolves destination name
+conflicts as skip, overwrite, or abort, then preflights identities and
+unregistered secret keys. Identity conflicts under different names abort before
+the first write. Selected secrets are written through `SecretStore`, followed
+by one atomic registry publication; a failure attempts to restore overwritten
+secrets and remove newly written secrets. Printable metadata is derived from
+validated records and filtered against credential fields from every account in
+the archive, preventing one account's token from entering another account's
+registry metadata. Import never changes OpenCode's live `auth.json` or the
+destination registry's active marker.
 
 ## Concurrency
 

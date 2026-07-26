@@ -14,6 +14,7 @@ to OpenCode's own process.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
@@ -26,6 +27,7 @@ from opencode_swap.models import (
     AccountDesc,
     AccountMeta,
     AuthRecord,
+    ImportConflictAction,
     JsonObject,
     Platform,
     SwitchTransaction,
@@ -234,8 +236,13 @@ class Switcher:
             transfer.write_archive(path, entries, password)
             return len(entries)
 
-    def import_accounts(self, path: Path, password: str) -> int:  # noqa: PLR0912, PLR0915
-        """Import an archive after strict all-account conflict preflight."""
+    def import_accounts(  # noqa: PLR0912, PLR0915
+        self,
+        path: Path,
+        password: str,
+        resolve_conflict: Callable[[str], ImportConflictAction] | None = None,
+    ) -> int:
+        """Import an archive, optionally resolving existing-name conflicts."""
         entries = transfer.read_archive(path, password)
         if not entries:
             raise OpenCodeSwapError("account archive contains no accounts")
@@ -278,44 +285,69 @@ class Switcher:
                 incoming.append((meta, record))
 
             existing_accounts = self.registry.accounts()
-            for meta, _record in incoming:
+            selected: list[tuple[AccountMeta, AuthRecord]] = []
+            overwritten_names: set[str] = set()
+            for meta, record in incoming:
                 if meta.name in existing_accounts:
-                    raise AccountExistsError(f"account name '{meta.name}' already exists; import made no changes")
+                    if resolve_conflict is None:
+                        raise AccountExistsError(f"account name '{meta.name}' already exists; import made no changes")
+                    action = resolve_conflict(meta.name)
+                    if action is ImportConflictAction.ABORT:
+                        raise OpenCodeSwapError("import aborted; no changes made")
+                    if action is ImportConflictAction.SKIP:
+                        continue
+                    if action is not ImportConflictAction.OVERWRITE:
+                        raise ValueError("invalid import conflict action")
+                    overwritten_names.add(meta.name)
+                selected.append((meta, record))
+
+            if not selected:
+                return 0
 
             existing_identities: set[tuple[str, str]] = set()
+            original_secrets: dict[str, str | None] = {}
             for name, meta in existing_accounts.items():
-                stored = self.secrets.get_confirmed(_secret_key(meta.provider, name))
+                key = _secret_key(meta.provider, name)
+                stored = self.secrets.get_confirmed(key)
+                if name in overwritten_names:
+                    original_secrets[key] = stored
+                    continue
                 if stored is None:
                     raise OpenCodeSwapError(f"no stored credentials for existing account '{name}'; import made no changes")
                 record = self._parse_stored_record(meta.provider, name, stored)
                 existing_identities.add((meta.provider, self._provider(meta.provider).identity(record)))
-            if incoming_identities & existing_identities:
+            selected_identities = {(meta.provider, self._provider(meta.provider).identity(record)) for meta, record in selected}
+            if selected_identities & existing_identities:
                 raise AccountExistsError("an imported account identity is already saved under another name; import made no changes")
 
-            for meta, _record in incoming:
-                if self.secrets.get_confirmed(_secret_key(meta.provider, meta.name)) is not None:
+            for meta, _record in selected:
+                key = _secret_key(meta.provider, meta.name)
+                if meta.name not in overwritten_names and self.secrets.get_confirmed(key) is not None:
                     raise AccountExistsError(f"account name '{meta.name}' has unregistered stored credentials; import made no changes")
+                original_secrets.setdefault(key, None)
 
             attempted_keys: list[str] = []
             try:
-                for meta, record in incoming:
+                for meta, record in selected:
                     key = _secret_key(meta.provider, meta.name)
                     attempted_keys.append(key)
                     self.secrets.put(key, json.dumps(record.raw))
-                self.registry.add_accounts([meta for meta, _record in incoming])
+                self.registry.upsert_accounts([meta for meta, _record in selected])
             except BaseException as exc:
                 cleanup_failed = False
                 for key in reversed(attempted_keys):
                     try:
-                        self.secrets.delete(key)
+                        original = original_secrets[key]
+                        if original is None:
+                            self.secrets.delete(key)
+                        else:
+                            self.secrets.put(key, original)
                     except BaseException:
                         cleanup_failed = True
                 if cleanup_failed:
-                    raise OpenCodeSwapError(
-                        "import failed and cleanup could not confirm removal of all newly written credentials; registry was not changed"
-                    ) from exc
+                    raise OpenCodeSwapError("import failed and cleanup could not restore all previous credentials; registry was not changed") from exc
                 raise
-            return len(incoming)
+            return len(selected)
 
     def use_account(self, name: str) -> AccountMeta:
         """Switch OpenCode's active account to the saved account `name`.
