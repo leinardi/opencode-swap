@@ -65,7 +65,9 @@ cryptography.**
 - **Sticky fallback:** once a keychain/keyring operation fails during a
   process, that `SecretStore` instance pins itself to the file backend for
   the rest of its life — it never flip-flops between backends mid-operation
-  even if the backend "recovers" partway through. (`store.py`)
+  even if the backend "recovers" partway through. Account deletion then
+  refuses rather than claiming an unreachable OS copy was removed.
+  (`store.py`)
 - **File-wins-on-read, reconcile-on-write:** if a fallback file exists for
   an account, it's treated as authoritative on read (it may be fresher than
   a stale/unreachable keychain copy from a prior fallback episode); a

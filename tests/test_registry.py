@@ -1,3 +1,4 @@
+import json
 import stat
 
 import pytest
@@ -96,6 +97,49 @@ def test_registry_missing_accounts_key_raises(tmp_path):
     reg = Registry(path)
     with pytest.raises(RegistryError):
         reg.accounts()
+
+
+@pytest.mark.parametrize(
+    "accounts",
+    [
+        {"work": {}},
+        {"Work": {"provider": "openai"}},
+        {"work": {"provider": "openai", "type": 1}},
+        {"work": {"provider": "openai", "refresh": "secret"}},
+        {"work": []},
+    ],
+)
+def test_malformed_account_metadata_raises_registry_error(tmp_path, accounts):
+    path = tmp_path / "registry.json"
+    path.write_text(json.dumps({"version": 1, "active": None, "accounts": accounts}))
+
+    with pytest.raises(RegistryError):
+        Registry(path).accounts()
+
+
+@pytest.mark.parametrize(
+    "registry",
+    [
+        {"version": 2, "active": None, "accounts": {}},
+        {"version": True, "active": None, "accounts": {}},
+        {"version": 1, "active": "missing", "accounts": {}},
+        {"version": 1, "active": "Work", "accounts": {"Work": {"provider": "openai"}}},
+        {"version": 1, "active": None, "accounts": {}, "refresh": "secret"},
+    ],
+)
+def test_registry_rejects_unknown_top_level_schema(tmp_path, registry):
+    path = tmp_path / "registry.json"
+    path.write_text(json.dumps(registry))
+
+    with pytest.raises(RegistryError):
+        Registry(path).accounts()
+
+
+def test_registry_metadata_allows_registered_future_providers(tmp_path):
+    path = tmp_path / "registry.json"
+    path.write_text(json.dumps({"version": 1, "active": None, "accounts": {"work": {"provider": "future", "type": "oauth"}}}))
+
+    assert Registry(path).accounts()["work"].provider == "future"
 
 
 def test_registry_never_contains_secret_fields(tmp_path):

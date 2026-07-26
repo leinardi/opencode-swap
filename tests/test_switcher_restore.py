@@ -1,4 +1,5 @@
 import json
+import threading
 import time
 
 import pytest
@@ -99,6 +100,80 @@ def test_restore_chains_current_into_bak(switcher):
     assert live_openai(switcher.opencode_auth_path)["accountId"] == "acct-b"
 
 
+def test_restore_write_failure_preserves_restore_source(switcher, monkeypatch):
+    _setup_two_accounts(switcher)
+    switcher.use_account("a")
+    switcher.use_account("b")  # .bak contains a; live contains b
+
+    monkeypatch.setattr("opencode_swap.opencode_auth.atomic_write_auth", lambda *args: (_ for _ in ()).throw(RuntimeError("boom")))
+    with pytest.raises(RuntimeError):
+        switcher.restore(source="bak")
+
+    snapshot = switcher.data_root / "backups" / backup.RESTORE_SNAPSHOT_FILENAME
+    assert live_openai(switcher.opencode_auth_path)["accountId"] == "acct-b"
+    assert backup.read_bak(switcher.data_root)["openai"]["accountId"] == "acct-b"
+    assert json.loads(snapshot.read_text())["openai"]["accountId"] == "acct-a"
+
+    with pytest.raises(OpenCodeSwapError, match="previous restore failed"):
+        switcher.restore(source="bak")
+    assert json.loads(snapshot.read_text())["openai"]["accountId"] == "acct-a"
+
+
+def test_restore_clears_marker_when_live_replacement_already_committed(switcher, monkeypatch):
+    _setup_two_accounts(switcher)
+    switcher.use_account("a")
+    switcher.use_account("b")
+    original_remove = backup.remove_restore_snapshot
+    monkeypatch.setattr(backup, "remove_restore_snapshot", lambda *args: (_ for _ in ()).throw(OSError("cleanup failed")))
+
+    with pytest.raises(OSError, match="cleanup failed"):
+        switcher.restore(source="bak")
+
+    assert live_openai(switcher.opencode_auth_path)["accountId"] == "acct-a"
+    monkeypatch.setattr(backup, "remove_restore_snapshot", original_remove)
+    meta = switcher.restore(source="bak")
+
+    assert meta.name == "a"
+    assert not (switcher.data_root / "backups" / backup.RESTORE_SNAPSHOT_FILENAME).exists()
+    assert live_openai(switcher.opencode_auth_path)["accountId"] == "acct-a"
+
+
+def test_restore_reads_backup_after_acquiring_lock(switcher, monkeypatch):
+    first = {"openai": oauth_entry(account_id="acct-a")}
+    second = {"openai": oauth_entry(account_id="acct-b")}
+    backup.write_bak(switcher.data_root, first)
+    write_auth(switcher.opencode_auth_path, oauth_entry(account_id="acct-live"))
+    restorer = Switcher(switcher.opencode_auth_path, switcher.data_root, platform=Platform.UNKNOWN)
+    errors = []
+    attempted_lock = threading.Event()
+    release_lock = threading.Event()
+    acquire = restorer.lock.acquire
+
+    def gated_acquire(timeout=None):
+        attempted_lock.set()
+        assert release_lock.wait(timeout=5)
+        return acquire(timeout)
+
+    monkeypatch.setattr(restorer.lock, "acquire", gated_acquire)
+
+    def restore():
+        try:
+            restorer.restore()
+        except Exception as exc:
+            errors.append(exc)
+
+    thread = threading.Thread(target=restore)
+    thread.start()
+    assert attempted_lock.wait(timeout=5)
+    backup.write_bak(switcher.data_root, second)
+    release_lock.set()
+
+    thread.join(timeout=5)
+    assert not thread.is_alive()
+    assert errors == []
+    assert json.loads(switcher.opencode_auth_path.read_text()) == second
+
+
 def test_restore_recovers_corrupted_live_file(switcher):
     _setup_two_accounts(switcher)
     switcher.use_account("a")
@@ -120,6 +195,19 @@ def test_restore_unidentifiable_record_still_succeeds(switcher):
     meta = switcher.restore(source="bak")
     assert meta is None  # couldn't identify, but didn't raise
     assert live_openai(switcher.opencode_auth_path) == {"type": "oauth"}
+
+
+def test_restore_ignores_malformed_unrelated_stored_credential(switcher):
+    write_auth(switcher.opencode_auth_path, oauth_entry(account_id="acct-bad"))
+    switcher.add_account("bad")
+    write_auth(switcher.opencode_auth_path, oauth_entry(account_id="acct-a"))
+    switcher.add_account("a")
+    switcher.secrets.put("openai:bad", "{")
+    data = {"openai": oauth_entry(account_id="acct-a")}
+    backup.write_bak(switcher.data_root, data)
+
+    assert switcher.restore(source="bak") is None
+    assert json.loads(switcher.opencode_auth_path.read_text()) == data
 
 
 def test_restore_preserves_other_provider_keys(switcher):

@@ -45,6 +45,15 @@ def test_extract_valid_wellknown():
     assert record.type == "wellknown"
 
 
+def test_unknown_type_error_never_includes_untrusted_value():
+    secret = "refresh-token-in-type-field"
+
+    with pytest.raises(SchemaError) as exc_info:
+        provider.extract({"openai": {"type": secret}})
+
+    assert secret not in str(exc_info.value)
+
+
 @pytest.mark.parametrize(
     "entry",
     [
@@ -52,7 +61,16 @@ def test_extract_valid_wellknown():
         {"type": "oauth", "refresh": "r", "expires": 1},  # missing access
         {"type": "oauth", "refresh": "r", "access": "a"},  # missing expires
         {"type": "oauth", "refresh": "r", "access": "a", "expires": "not-a-number"},
+        {"type": "oauth", "refresh": "r", "access": "a", "expires": True},
+        {"type": "oauth", "refresh": "r", "access": "a", "expires": float("nan")},
+        {"type": "oauth", "refresh": "r", "access": "a", "expires": float("inf")},
+        {"type": "oauth", "refresh": "r", "access": "a", "expires": 10**1000},
+        {"type": "oauth", "refresh": "r", "access": "a", "expires": 1, "accountId": True},
+        {"type": "oauth", "refresh": "r", "access": "a", "expires": 1, "enterpriseUrl": True},
+        {"type": "oauth", "refresh": "r", "access": "a", "expires": 1, "unknown": float("nan")},
         {"type": "api"},  # missing key
+        {"type": "api", "key": "k", "metadata": []},
+        {"type": "api", "key": "k", "metadata": {"nested": float("nan")}},
         {"type": "wellknown", "key": "k"},  # missing token
         {"type": "totally-unknown"},
         {"no": "type field"},
@@ -106,6 +124,21 @@ def test_describe_oauth_with_and_without_email():
     without_email = provider.extract({"openai": oauth_entry()})
     desc2 = provider.describe(without_email)
     assert desc2.email is None
+
+
+def test_describe_suppresses_secret_or_terminal_metadata():
+    entry = oauth_entry(access=make_jwt({"email": "refresh-token", "chatgpt_account_id": "bad\naccount"}))
+    del entry["accountId"]
+    record = provider.extract({"openai": entry})
+    desc = provider.describe(record)
+    assert desc.email is None
+    assert desc.account_id is None
+
+
+def test_describe_suppresses_metadata_containing_credential():
+    entry = oauth_entry(refresh="refresh-token", access=make_jwt({"email": "refresh-token@example.test"}))
+    record = provider.extract({"openai": entry})
+    assert provider.describe(record).email is None
 
 
 def test_validate_ok_expired_invalid():

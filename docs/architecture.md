@@ -98,9 +98,11 @@ $XDG_DATA_HOME/opencode-swap/            (0700)
   backups/                               (0700)
     auth.json.bak                        (0600) — most recent pre-switch snapshot
     auth.json.pristine                   (0600) — first-ever snapshot, written once
-    unclaimed-<provider>-<ts>.json       (0600) — a foreign login preserved instead of overwritten
+    auth.json.restore                    (0600) — temporary restore source; retained if restore fails
+    unclaimed-<provider>-<ts>-<suffix>.json (0600) — foreign login preserved instead of overwritten
   secrets/                               (0700, only created if the file fallback is used)
-    <provider>_<name>.enc                (0600) — base64-obfuscated record, fallback only
+    v2-<sha256-key>.enc                  (0600) — base64-obfuscated record, fallback only;
+                                          legacy openai_<name>.enc files migrate on write
   .lock                                  — FileLock target
 
 OpenCode's own state (read + atomically rewritten):

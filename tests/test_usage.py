@@ -1,7 +1,7 @@
 import json
 import urllib.error
 
-from opencode_swap import usage
+from opencode_swap import cli, usage
 
 
 class FakeResponse:
@@ -44,10 +44,12 @@ def test_reset_at_already_in_milliseconds_passed_through(monkeypatch):
     assert snap.reset_at == 1785500000123
 
 
-def test_unknown_plan_type_passed_through_verbatim(monkeypatch):
-    monkeypatch.setattr(usage.urllib.request, "urlopen", lambda *a, **k: FakeResponse(_payload(plan_type="mystery")))
+def test_unknown_plan_type_is_not_displayed(monkeypatch):
+    secret = "access-token-leaked-by-server"
+    monkeypatch.setattr(usage.urllib.request, "urlopen", lambda *a, **k: FakeResponse(_payload(plan_type=secret)))
     snap = usage.fetch_openai_oauth_usage("access-token", None)
-    assert snap.plan_name == "mystery"
+    assert snap.plan_name is None
+    assert secret not in cli._format_usage(snap)
 
 
 def test_missing_rate_limit_still_available_but_no_percent(monkeypatch):
@@ -81,6 +83,21 @@ def test_malformed_json_returns_unavailable(monkeypatch):
     monkeypatch.setattr(usage.urllib.request, "urlopen", lambda *a, **k: FakeResponse(b"not json"))
     snap = usage.fetch_openai_oauth_usage("access-token", None)
     assert snap.available is False
+
+
+def test_invalid_utf8_returns_unavailable(monkeypatch):
+    monkeypatch.setattr(usage.urllib.request, "urlopen", lambda *a, **k: FakeResponse(b"\xff"))
+    assert usage.fetch_openai_oauth_usage("access-token", None).available is False
+
+
+def test_nonfinite_or_huge_usage_values_are_rejected(monkeypatch):
+    body = b'{"rate_limit":{"primary_window":{"used_percent":NaN,"reset_at":1e300}}}'
+    monkeypatch.setattr(usage.urllib.request, "urlopen", lambda *a, **k: FakeResponse(body))
+    snap = usage.fetch_openai_oauth_usage("access-token", None)
+    assert snap.used_percent is None
+    assert snap.reset_at is None
+    assert cli._format_usage(usage.UsageSnapshot(available=True, used_percent=1, reset_at=float("inf"))) == "  usage: 1%"
+    assert usage._reset_at_millis(10**1000) is None
 
 
 def test_non_dict_body_returns_unavailable(monkeypatch):

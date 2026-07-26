@@ -1,125 +1,116 @@
 # AGENTS.md
 
-Guide for AI coding agents working in this repository. Read this before
-making changes.
+Guide for AI agents in this repo. Read before change anything.
 
 ## What this is
 
-`opencode-swap` is a standalone Python CLI that switches OpenCode between
-multiple saved OpenAI accounts, by securely storing each account's OpenCode
-credential record and atomically swapping it into
-`~/.local/share/opencode/auth.json` — the single file OpenCode itself reads
-fresh on every request. It is explicitly **not** an OpenCode plugin and
-**not** a runtime proxy/interceptor (that's what the separate
-`opencode-balancer` project does). Full rationale in `README.md` and
+`opencode-swap` = standalone Python CLI. Switches OpenCode between multi saved
+OpenAI accounts — securely store each account's OpenCode credential record,
+atomic-swap into `~/.local/share/opencode/auth.json` — single file OpenCode
+reads fresh every request. NOT OpenCode plugin. NOT runtime proxy/interceptor
+(that's `opencode-balancer` project). Full rationale: `README.md` +
 `docs/architecture.md`.
 
-Reference project this was modeled on: `claude-swap` (same idea, for Claude
-Code). Its design choices — atomic writes, transaction+rollback, keychain
-routing with a sticky file fallback — were deliberately ported and adapted
-here; `docs/architecture.md` and `docs/security.md` note what was kept vs.
-changed and why.
+Model project: `claude-swap` (same idea, Claude Code). Design choices —
+atomic writes, transaction+rollback, keychain routing w/ sticky file fallback
+— ported+adapted here. `docs/architecture.md` + `docs/security.md` note kept
+vs changed, why.
 
 ## Before touching anything
 
-Read these two first — most "obvious" changes are wrong without this context:
+Read these two first — most "obvious" changes wrong without context:
 
-1. `docs/opencode-auth.md` — documents OpenCode's `auth.json` format,
-   refresh behavior, and locking (or lack of it). This is reverse-engineered
-   from OpenCode's source, not documented by OpenCode itself. Every
-   assumption in this codebase about "what OpenCode does" traces back to
-   this file — if OpenCode's behavior is in question, that's where to check
-   or update, not to re-guess from scratch.
-2. `docs/architecture.md` — the switch algorithm, why sync-back exists, and
-   why the transaction/rollback only needs to cover the `auth.json` write
-   step (not every step). Re-deriving this from the code alone is easy to
-   get subtly wrong (see "fail-safe" note below).
+1. `docs/opencode-auth.md` — docs OpenCode's `auth.json` format, refresh
+   behavior, locking (or lack). Reverse-engineered from OpenCode source, not
+   OpenCode-documented. Every assumption here re "what OpenCode does" traces
+   back to this file — if OpenCode behavior in question, check/update here,
+   don't re-guess.
+2. `docs/architecture.md` — switch algorithm, why sync-back exists, why
+   transaction/rollback only covers `auth.json` write step (not every step).
+   Re-deriving from code alone easy to get subtly wrong (see "fail-safe" note
+   below).
 
 ## Core invariants — do not violate
 
-- **auth.json writes are always atomic.** Temp file in the same directory,
-  `chmod 0600`, then `os.replace`. Never write OpenCode's `auth.json` (or any
-  file under opencode-swap's own data dir) any other way. See `atomic.py`.
-- **Never silently guess at an unrecognized schema.** If a provider record
-  doesn't match a known shape, raise `SchemaError` and refuse — don't drop
-  fields, don't coerce, don't proceed. OpenCode itself is lenient here (it
-  silently drops bad entries); this project deliberately holds itself to a
-  stricter standard because it's about to overwrite state. There was a real
-  bug of exactly this kind (`Switcher.current()` was catching `SchemaError`
-  via a too-broad `except OpenCodeSwapError` and reporting "no active
-  account" instead of surfacing the incompatibility) — caught by tests, now
-  regression-tested. Watch for the same class of bug: catching a specific
-  exception's *base class* somewhere that should only catch the specific
-  case.
-- **Never lose a live credential without preserving it first.** Before
-  `use_account` overwrites the live `openai` entry, it either syncs a
-  managed account's rotated tokens back into storage, or stashes an
-  unmanaged/foreign login under `backups/unclaimed-*.json`. Don't add a code
-  path that overwrites `auth.json` without going through this.
-- **Secrets never touch the non-secret registry.** `registry.json` holds
-  only name/provider/type/account id/email/timestamp. Access tokens, refresh
-  tokens, and API keys only ever go through `SecretStore` (keychain/keyring/
-  file). If you're about to put a token-shaped string into `registry.py` or
-  `models.AccountMeta`, stop.
-- **No secrets in CLI output, logs, or error messages.** `cli.py` truncates
-  account ids to the last 4 characters and never prints token fields.
-  Anything you add to CLI output needs the same discipline — there are tests
-  that grep stdout/stderr for planted secret values.
-- **No custom cryptography.** The security model is OS keychain/keyring
-  first, `chmod 0600` obfuscated files as a sticky fallback — matching (not
-  exceeding) OpenCode's own trust boundary. Don't add encryption, key
-  derivation, or a "vault" — see `docs/security.md` for why this was a
-  deliberate choice, not an oversight.
-- **Every mutating `Switcher` operation holds `self.lock`.** It serializes
-  opencode-swap's own concurrent invocations. It has no relationship to
-  OpenCode's own process — there's no cooperative lock protocol to join
-  (OpenCode's own `auth.json` writes are unlocked and non-atomic; see
-  `docs/opencode-auth.md`). Don't assume the lock protects against a
-  concurrently-running OpenCode; `process_detection.py` + a confirmation
-  prompt is the (best-effort, advisory) mitigation for that instead.
+- **auth.json writes always atomic.** Temp file same dir, `chmod 0600`, then
+  `os.replace`. Never write OpenCode's `auth.json` (or any file under
+  opencode-swap's own data dir) other way. See `atomic.py`.
+- **Never silently guess unrecognized schema.** Provider record doesn't
+  match known shape → raise `SchemaError`, refuse — don't drop fields,
+  don't coerce, don't proceed. OpenCode itself lenient here (silently drops
+  bad entries); this project deliberately stricter, about to overwrite
+  state. Real bug happened: `Switcher.current()` caught `SchemaError` via
+  too-broad `except OpenCodeSwapError`, reported "no active account" instead
+  of surfacing incompatibility — caught by tests, now regression-tested.
+  Watch same bug class: catching specific exception's *base class* where
+  should only catch specific case.
+- **Never lose live credential without preserving first.** Before
+  `use_account` overwrites live `openai` entry, either syncs managed
+  account's rotated tokens back into storage, or stashes
+  unmanaged/foreign login under `backups/unclaimed-*.json`. Don't add code
+  path overwriting `auth.json` skipping this.
+- **Secrets never touch non-secret registry.** `registry.json` holds only
+  name/provider/type/account id/email/timestamp. Access tokens, refresh
+  tokens, API keys only through `SecretStore` (keychain/keyring/file). About
+  to put token-shaped string into `registry.py` or `models.AccountMeta`?
+  Stop.
+- **No secrets in CLI output, logs, error messages.** `cli.py` truncates
+  account ids to last 4 chars, never prints token fields. Anything added to
+  CLI output needs same discipline — tests grep stdout/stderr for planted
+  secret values.
+- **No custom cryptography.** Security model = OS keychain/keyring first,
+  `chmod 0600` obfuscated files as sticky fallback — matches (not exceeds)
+  OpenCode's own trust boundary. Don't add encryption, key derivation,
+  "vault" — see `docs/security.md`, deliberate choice not oversight.
+- **Every mutating `Switcher` op holds `self.lock`.** Serializes
+  opencode-swap's own concurrent invocations. No relation to OpenCode's own
+  process — no cooperative lock protocol to join (OpenCode's own
+  `auth.json` writes unlocked, non-atomic; see `docs/opencode-auth.md`).
+  Don't assume lock protects against concurrently-running OpenCode;
+  `process_detection.py` + confirmation prompt = best-effort advisory
+  mitigation instead.
 
 ## Testing rules
 
-- **Never let a test touch the real OS keychain/keyring.** Construct
-  `Switcher`/`SecretStore` with `platform=Platform.UNKNOWN` (routes straight
-  to the file backend) or monkeypatch the specific backend functions
-  (`macos_keychain.*`, `keyring.*`) with an in-memory fake. `tests/test_cli.py`'s
-  `isolated_env` autouse fixture does this for all CLI tests — reuse that
-  pattern, don't bypass it.
-- **Never let a test touch the real `~/.local/share/opencode/auth.json`.**
-  Point `Switcher(opencode_auth_path=...)` at a `tmp_path`, or (for CLI
-  tests) set `XDG_DATA_HOME` to a `tmp_path` via `monkeypatch.setenv`.
-- Account names get lowercased by `normalize_account_name` — using `"A"`/`"B"`
-  as test account names while looking them up with `"openai:A"` is a bug
-  that has bitten this codebase before (fixed, but easy to reintroduce).
-  Use lowercase names in tests.
+- **Never let test touch real OS keychain/keyring.** Construct
+  `Switcher`/`SecretStore` w/ `platform=Platform.UNKNOWN` (routes straight
+  to file backend) or monkeypatch specific backend functions
+  (`macos_keychain.*`, `keyring.*`) w/ in-memory fake. `tests/test_cli.py`'s
+  `isolated_env` autouse fixture does this for all CLI tests — reuse
+  pattern, don't bypass.
+- **Never let test touch real `~/.local/share/opencode/auth.json`.** Point
+  `Switcher(opencode_auth_path=...)` at `tmp_path`, or (CLI tests) set
+  `XDG_DATA_HOME` to `tmp_path` via `monkeypatch.setenv`.
+- Account names lowercased by `normalize_account_name` — using `"A"`/`"B"`
+  as test account names while looking up via `"openai:A"` = bug that bit
+  codebase before (fixed, easy reintroduce). Use lowercase names in tests.
 - Failure-injection tests should target one specific write call, not
-  monkeypatch something broad like `json.dumps` globally — multiple call
-  sites (`.bak` write, `auth.json` write, registry write) share the same
-  helper (`atomic.atomic_write_json`), so a global patch fails the *first*
-  one encountered, not necessarily the one you meant to test. See
-  `test_switcher_use.py`'s failure-injection tests for the pattern (patch a
-  specific module attribute, or filter by path in a wrapper).
-- Run `uv run pytest -q` — should be ~167+ tests, a couple seconds, no
-  network access, no prompts. If it's slower or needs network/keychain
-  access, something regressed the isolation above.
+  monkeypatch something broad like `json.dumps` globally — multi call sites
+  (`.bak` write, `auth.json` write, registry write) share same helper
+  (`atomic.atomic_write_json`), global patch fails *first* one encountered,
+  not necessarily one meant to test. See `test_switcher_use.py`'s
+  failure-injection tests for pattern (patch specific module attribute, or
+  filter by path in wrapper).
+- Verify every codebase change w/ `make check`. Runs linters+tests; no
+  network access, prompts, real keychain/auth files. If needs them, test
+  isolation regressed.
 
 ## Project conventions
 
 - Python 3.12+, stdlib `argparse` (no Click/Typer), dataclasses over
   ad-hoc dicts, `from __future__ import annotations` everywhere.
-- `uv` for dependency management (`uv sync --dev`, `uv run pytest`, `uv run
+- `uv` for dependency mgmt (`uv sync --dev`, `uv run pytest`, `uv run
   opencode-swap ...`).
-- Comments explain *why*, not *what* — especially citing the specific
-  OpenCode source behavior or the specific incident (a bug found during
-  manual verification, a claude-swap precedent) that justifies a non-obvious
-  choice. If you can't cite a reason, the comment probably shouldn't exist.
-- Don't add abstraction for a hypothetical second provider "in case it's
-  needed later" — the `Provider` protocol (`providers/base.py`) is
-  deliberately the smallest seam that makes adding provider #2 not require
-  touching `switcher.py`. Keep it that way; don't grow it speculatively.
-- See `docs/architecture.md` for the module responsibility map before adding
-  a new file — most new code belongs in an existing module.
+- Comments explain *why*, not *what* — esp citing specific OpenCode source
+  behavior or specific incident (bug found during manual verification,
+  claude-swap precedent) justifying non-obvious choice. Can't cite reason →
+  comment probably shouldn't exist.
+- Don't add abstraction for hypothetical second provider "in case needed
+  later" — `Provider` protocol (`providers/base.py`) deliberately smallest
+  seam making provider #2 addable w/o touching `switcher.py`. Keep that
+  way; don't grow speculatively.
+- See `docs/architecture.md` for module responsibility map before adding
+  new file — most new code belongs in existing module.
 
 ## Full documentation index
 

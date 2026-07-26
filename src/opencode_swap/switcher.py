@@ -26,12 +26,14 @@ from opencode_swap.models import (
     AccountDesc,
     AccountMeta,
     AuthRecord,
+    JsonObject,
     Platform,
     SwitchTransaction,
     Validity,
     normalize_account_name,
 )
 from opencode_swap.providers import PROVIDERS
+from opencode_swap.providers.base import Provider
 from opencode_swap.store import Registry, SecretStore
 
 
@@ -41,6 +43,13 @@ def _secret_key(provider_id: str, name: str) -> str:
 
 def _now_iso() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _same_orphan_record(provider: Provider, stored: AuthRecord, incoming: AuthRecord) -> bool:
+    if stored.raw == incoming.raw:
+        return True
+    stored_identity = provider.identity(stored)
+    return stored_identity == provider.identity(incoming) and not stored_identity.startswith("oauth-refresh\0")
 
 
 @dataclass
@@ -63,16 +72,34 @@ class Switcher:
     def default(cls) -> Switcher:
         return cls(opencode_auth_path=paths.get_opencode_auth_path(), data_root=paths.get_data_root())
 
+    @staticmethod
+    def _provider(provider_id: str) -> Provider:
+        try:
+            return PROVIDERS[provider_id]
+        except KeyError:
+            raise OpenCodeSwapError("unsupported provider in registry") from None
+
     def _load_record(self, provider_id: str, name: str) -> AuthRecord | None:
         stored = self.secrets.get(_secret_key(provider_id, name))
         if stored is None:
             return None
+        return self._parse_stored_record(provider_id, name, stored)
+
+    def _parse_stored_record(self, provider_id: str, name: str, stored: str) -> AuthRecord:
         meta = self.registry.accounts().get(name)
-        record_type = meta.type if meta is not None else json.loads(stored).get("type", "oauth")
-        return AuthRecord(type=record_type, raw=json.loads(stored))
+        try:
+            raw = json.loads(stored)
+        except json.JSONDecodeError as exc:
+            raise SchemaError(f"stored credentials for '{name}' are not valid JSON") from exc
+        record = self._provider(provider_id).extract({provider_id: raw})
+        if record is None:  # extract only returns None for an absent provider key
+            raise SchemaError(f"stored credentials for '{name}' are missing")
+        if meta is not None and record.type != meta.type:
+            raise SchemaError(f"stored credentials for '{name}' do not match registry type")
+        return record
 
     def _find_by_identity(self, provider_id: str, identity: str) -> str | None:
-        provider = PROVIDERS[provider_id]
+        provider = self._provider(provider_id)
         for name, meta in self.registry.accounts().items():
             if meta.provider != provider_id:
                 continue
@@ -96,11 +123,11 @@ class Switcher:
         schema is reported rather than masqueraded as "no active account".
         """
         auth = opencode_auth.read_auth(self.opencode_auth_path)
-        return PROVIDERS[provider_id].extract(auth)
+        return self._provider(provider_id).extract(auth)
 
     def add_account(self, name: str, provider_id: str = "openai") -> AccountMeta:
         name = normalize_account_name(name)
-        provider = PROVIDERS[provider_id]
+        provider = self._provider(provider_id)
 
         with self.lock:
             try:
@@ -123,6 +150,13 @@ class Switcher:
             existing_meta = self.registry.accounts().get(name)
             if existing_meta is not None and existing_owner is None:
                 raise AccountExistsError(f"account name '{name}' is already used by a different account; remove it first or choose another name")
+            if existing_meta is None:
+                destination_secret = self.secrets.get_confirmed(_secret_key(provider_id, name))
+                destination_record = self._parse_stored_record(provider_id, name, destination_secret) if destination_secret is not None else None
+                if destination_record is not None and not _same_orphan_record(provider, destination_record, record):
+                    raise AccountExistsError(
+                        f"account name '{name}' has unregistered stored credentials; recover it with the matching account or remove it first"
+                    )
 
             desc = provider.describe(record)
             added = existing_meta.added if existing_meta is not None else _now_iso()
@@ -166,15 +200,14 @@ class Switcher:
             if target_meta is None:
                 raise OpenCodeSwapError(f"no such account: {name}")
             provider_id = target_meta.provider
-            provider = PROVIDERS[provider_id]
+            provider = self._provider(provider_id)
 
-            target_secret = self.secrets.get(_secret_key(provider_id, name))
-            if target_secret is None:
+            target_record = self._load_record(provider_id, name)
+            if target_record is None:
                 raise OpenCodeSwapError(
                     f"no stored credentials for '{name}' (secret store may be out of sync); "
                     f"try `opencode-swap add {name}` again while that account is active in OpenCode"
                 )
-            target_record = AuthRecord(type=target_meta.type, raw=json.loads(target_secret))
 
             auth = opencode_auth.read_auth(self.opencode_auth_path) if self.opencode_auth_path.exists() else {}
 
@@ -186,11 +219,29 @@ class Switcher:
                 if live_record is not None:
                     live_identity = provider.identity(live_record)
                     owner_name = self._find_by_identity(provider_id, live_identity)
+                    if owner_name is None and live_identity.startswith("oauth-refresh\0"):
+                        active_name = self.registry.get_active()
+                        if active_name is not None:
+                            active_meta = self.registry.accounts().get(active_name)
+                            if active_meta is not None and active_meta.provider == provider_id and active_meta.type == live_record.type:
+                                active_record = self._load_record(provider_id, active_name)
+                                if active_record is not None and provider.identity(active_record).startswith("oauth-refresh\0"):
+                                    backup.write_unclaimed(self.data_root, provider_id, live_record.raw)
+                                    transaction.record_step("unclaimed_stashed")
+                                    raise OpenCodeSwapError(
+                                        "live OpenAI credential changed without a stable account id; "
+                                        "preserved it as an unclaimed backup and refused to overwrite it"
+                                    )
                     if owner_name is not None:
                         stored = self.secrets.get(_secret_key(provider_id, owner_name))
                         if stored is None or json.loads(stored) != live_record.raw:
                             self.secrets.put(_secret_key(provider_id, owner_name), json.dumps(live_record.raw))
                             transaction.record_step("sync_captured")
+                        if owner_name == name:
+                            # A self-switch may have just captured rotated tokens;
+                            # never splice the pre-sync cached record back over them.
+                            target_record = self._load_record(provider_id, name)
+                            assert target_record is not None
                     else:
                         backup.write_unclaimed(self.data_root, provider_id, live_record.raw)
                         transaction.record_step("unclaimed_stashed")
@@ -227,8 +278,21 @@ class Switcher:
             meta = self.registry.accounts().get(name)
             if meta is None:
                 raise OpenCodeSwapError(f"no such account: {name}")
-            self.secrets.delete(_secret_key(meta.provider, name))
+            original_active = self.registry.get_active()
+            secret_key = _secret_key(meta.provider, name)
+            secret = self.secrets.get(secret_key)
             self.registry.remove_account(name)
+            try:
+                self.secrets.delete(secret_key)
+            except BaseException:
+                # OS deletion errors are ambiguous: it might have completed
+                # before timing out. Preserve captured credentials in the
+                # pinned file fallback before re-registering this account.
+                if secret is not None:
+                    self.secrets.put(secret_key, secret)
+                self.registry.upsert_account(meta)
+                self.registry.set_active(original_active)
+                raise
 
     def rename_account(self, old: str, new: str) -> None:
         old = normalize_account_name(old)
@@ -241,10 +305,52 @@ class Switcher:
                 raise AccountExistsError(f"account already exists: {new}")
 
             secret = self.secrets.get(_secret_key(meta.provider, old))
-            if secret is not None:
-                self.secrets.put(_secret_key(meta.provider, new), secret)
-                self.secrets.delete(_secret_key(meta.provider, old))
-            self.registry.rename_account(old, new)
+            if secret is None:
+                raise OpenCodeSwapError(f"no stored credentials for '{old}' (secret store may be unavailable)")
+            provider = self._provider(meta.provider)
+            source_record = self._load_record(meta.provider, old)
+            assert source_record is not None
+            old_key = _secret_key(meta.provider, old)
+            new_key = _secret_key(meta.provider, new)
+            previous_new_secret = self.secrets.get_confirmed(new_key)
+            if previous_new_secret is not None:
+                destination_record = self._parse_stored_record(meta.provider, new, previous_new_secret)
+                if destination_record is not None and not _same_orphan_record(provider, destination_record, source_record):
+                    raise AccountExistsError(
+                        f"account name '{new}' has unregistered stored credentials; recover it with the matching account or remove it first"
+                    )
+            self.secrets.put(new_key, secret)
+            registry_renamed = False
+            try:
+                self.registry.rename_account(old, new)
+                registry_renamed = True
+                self.secrets.delete(old_key)
+            except BaseException:
+                if registry_renamed:
+                    # Keep the new registry mapping if recovery fails: it
+                    # still names the pre-copied usable credential.
+                    self.secrets.put(old_key, secret)
+                    self.registry.rename_account(new, old)
+                if previous_new_secret is None:
+                    with suppress(OpenCodeSwapError):
+                        self.secrets.delete(new_key)
+                else:
+                    self.secrets.put(new_key, previous_new_secret)
+                raise
+
+    def _finish_restore(self, data: JsonObject, provider_id: str) -> AccountMeta | None:
+        """Best-effort bookkeeping after a restore has committed live state."""
+        try:
+            record = self._provider(provider_id).extract(data)
+            owner_name = self._find_by_identity(provider_id, self._provider(provider_id).identity(record)) if record else None
+        except OpenCodeSwapError:
+            owner_name = None
+        with suppress(OpenCodeSwapError):
+            self.registry.set_active(owner_name)
+        try:
+            return self.registry.accounts().get(owner_name) if owner_name else None
+        except OpenCodeSwapError:
+            return None
 
     def restore(self, source: str = "bak", provider_id: str = "openai") -> AccountMeta | None:
         """Restore OpenCode's auth.json from a backup snapshot.
@@ -259,18 +365,35 @@ class Switcher:
         when the restored data's provider entry can't even be interpreted —
         the restore itself still succeeds; only identification is skipped).
         """
-        if source == "bak":
-            data = backup.read_bak(self.data_root)
-            if data is None:
-                raise OpenCodeSwapError("no .bak snapshot found; nothing to restore")
-        elif source == "pristine":
-            data = backup.read_pristine(self.data_root)
-            if data is None:
-                raise OpenCodeSwapError("no pristine snapshot found; nothing to restore")
-        else:
-            raise ValueError(f"unknown restore source: {source!r}")
-
         with self.lock:
+            recovery = backup.read_restore_snapshot(self.data_root)
+            if recovery is not None:
+                try:
+                    live = opencode_auth.read_auth(self.opencode_auth_path)
+                except AuthFileError:
+                    live = None
+                if live == recovery:
+                    backup.remove_restore_snapshot(self.data_root)
+                    return self._finish_restore(recovery, provider_id)
+                raise OpenCodeSwapError(
+                    "a previous restore failed and its recovery source is retained at "
+                    f"{self.data_root / 'backups' / backup.RESTORE_SNAPSHOT_FILENAME}; resolve it before restoring again"
+                )
+            if source == "bak":
+                data = backup.read_bak(self.data_root)
+                if data is None:
+                    raise OpenCodeSwapError("no .bak snapshot found; nothing to restore")
+            elif source == "pristine":
+                data = backup.read_pristine(self.data_root)
+                if data is None:
+                    raise OpenCodeSwapError("no pristine snapshot found; nothing to restore")
+            else:
+                raise ValueError(f"unknown restore source: {source!r}")
+
+            # A restore from .bak must not erase its only source before the
+            # new live auth.json has landed. Keep this durable until chaining
+            # current live state into .bak and the live replacement both pass.
+            backup.write_restore_snapshot(self.data_root, data)
             if self.opencode_auth_path.exists():
                 try:
                     current_live = opencode_auth.read_auth(self.opencode_auth_path)
@@ -279,19 +402,8 @@ class Switcher:
                     pass  # current file is unreadable -- exactly the case restore exists for
 
             opencode_auth.atomic_write_auth(self.opencode_auth_path, data)
-
-            provider = PROVIDERS[provider_id]
-            try:
-                record = provider.extract(data)
-            except SchemaError:
-                record = None
-            owner_name = None
-            if record is not None:
-                owner_name = self._find_by_identity(provider_id, provider.identity(record))
-            with suppress(OpenCodeSwapError):
-                self.registry.set_active(owner_name)
-
-        return self.registry.accounts().get(owner_name) if owner_name else None
+            backup.remove_restore_snapshot(self.data_root)
+            return self._finish_restore(data, provider_id)
 
     def fetch_usage(self, name: str) -> usage.UsageSnapshot | None:
         """Live OpenAI usage lookup for a saved account. None if the
@@ -323,7 +435,7 @@ class Switcher:
         record = self._load_record(meta.provider, name)
         if record is None:
             return Validity.INVALID
-        return PROVIDERS[meta.provider].validate(record)
+        return self._provider(meta.provider).validate(record)
 
     def next_account(self, provider_id: str = "openai") -> AccountMeta:
         """Return next saved account after the live managed account, wrapping around."""
@@ -348,7 +460,7 @@ class Switcher:
         if record is None:
             return None, None
 
-        provider = PROVIDERS[provider_id]
+        provider = self._provider(provider_id)
         identity = provider.identity(record)
         owner = self._find_by_identity(provider_id, identity)
         meta = self.registry.accounts().get(owner) if owner else None

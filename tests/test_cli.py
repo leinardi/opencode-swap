@@ -79,6 +79,20 @@ def test_add_never_prints_secrets(tmp_path, capsys):
     assert "super-secret-refresh-token" not in combined
 
 
+def test_add_does_not_persist_or_print_secret_jwt_email(tmp_path, capsys):
+    secret = "super-secret-refresh-token"
+    write_live_account(tmp_path, account_id="acct-1", refresh=secret)
+    auth = json.loads(auth_path(tmp_path).read_text())
+    auth["openai"]["access"] = make_jwt({"chatgpt_account_id": "acct-1", "email": secret})
+    auth_path(tmp_path).write_text(json.dumps(auth))
+
+    assert cli.main(["add", "work"]) == 0
+
+    assert secret not in "".join(capsys.readouterr())
+    registry = (tmp_path / "opencode-swap" / "registry.json").read_text()
+    assert secret not in registry
+
+
 def test_list_empty(capsys):
     assert cli.main(["list"]) == 0
     assert "No accounts saved" in capsys.readouterr().out
@@ -92,6 +106,16 @@ def test_list_shows_active_marker(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "*" in out
     assert "work" in out
+
+
+def test_list_does_not_mark_stale_registry_active_account(tmp_path, capsys):
+    write_live_account(tmp_path, account_id="acct-1")
+    cli.main(["add", "work"])
+    write_live_account(tmp_path, account_id="external")
+    capsys.readouterr()
+
+    assert cli.main(["list"]) == 0
+    assert "*" not in capsys.readouterr().out
 
 
 def test_list_without_usage_flag_never_touches_network(tmp_path, monkeypatch, capsys):
@@ -182,7 +206,7 @@ def test_use_switches_account(tmp_path, capsys):
     cli.main(["add", "personal"])
     capsys.readouterr()
 
-    assert cli.main(["use", "work"]) == 0
+    assert cli.main(["use", "work", "--yes"]) == 0
     assert "Switched to 'work'" in capsys.readouterr().out
     assert json.loads(auth_path(tmp_path).read_text())["openai"]["accountId"] == "acct-1"
 
@@ -194,11 +218,11 @@ def test_switch_cycles_accounts_and_wraps(tmp_path, capsys):
     cli.main(["add", "personal"])
     capsys.readouterr()
 
-    assert cli.main(["switch"]) == 0
+    assert cli.main(["switch", "--yes"]) == 0
     assert "Switched to 'work'" in capsys.readouterr().out
     assert json.loads(auth_path(tmp_path).read_text())["openai"]["accountId"] == "acct-1"
 
-    assert cli.main(["switch"]) == 0
+    assert cli.main(["switch", "--yes"]) == 0
     assert "Switched to 'personal'" in capsys.readouterr().out
     assert json.loads(auth_path(tmp_path).read_text())["openai"]["accountId"] == "acct-2"
 
@@ -209,7 +233,7 @@ def test_switch_without_managed_active_account_fails_cleanly(capsys):
 
 
 def test_use_unknown_account_fails_cleanly(capsys):
-    assert cli.main(["use", "ghost"]) == 1
+    assert cli.main(["use", "ghost", "--yes"]) == 1
     assert "opencode-swap:" in capsys.readouterr().err
 
 
@@ -220,6 +244,15 @@ def test_use_prompts_when_opencode_running_and_aborts_non_tty(tmp_path, monkeypa
 
     monkeypatch.setattr(process_detection, "is_opencode_running", lambda: True)
     assert cli.main(["use", "work"]) == 1  # non-tty, no --yes -> refuses
+    assert "Aborted" in capsys.readouterr().err
+
+
+def test_use_requires_confirmation_when_opencode_is_not_running(tmp_path, capsys):
+    write_live_account(tmp_path, account_id="acct-1")
+    cli.main(["add", "work"])
+    capsys.readouterr()
+
+    assert cli.main(["use", "work"]) == 1
     assert "Aborted" in capsys.readouterr().err
 
 

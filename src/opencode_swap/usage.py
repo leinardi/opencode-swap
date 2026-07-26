@@ -15,6 +15,7 @@ local/offline-only, and this is the one exception, kept opt-in on purpose.
 from __future__ import annotations
 
 import json
+import math
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -22,6 +23,7 @@ from dataclasses import dataclass
 CHATGPT_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
 _TIMEOUT = 5.0
 _USER_AGENT = "opencode-swap"
+_MAX_RESET_AT_MILLIS = 253_402_300_000_000  # 9999-12-31, safely datetime-compatible
 
 _PLAN_NAMES = {
     "enterprise": "ChatGPT Enterprise",
@@ -44,15 +46,20 @@ def _plan_name(plan_type: object) -> str | None:
     if not isinstance(plan_type, str) or not plan_type.strip():
         return None
     key = plan_type.strip().lower()
-    return _PLAN_NAMES.get(key, plan_type)
+    return _PLAN_NAMES.get(key)
 
 
 def _reset_at_millis(value: object) -> float | None:
     if not isinstance(value, (int, float)) or isinstance(value, bool) or value < 0:
         return None
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if value > _MAX_RESET_AT_MILLIS:
+        return None
     # opencode-balancer's own heuristic: values already in the millisecond
     # range are passed through, smaller ones are assumed to be seconds.
-    return float(value) if value > 1_000_000_000_000 else float(value) * 1000
+    millis = float(value) if value > 1_000_000_000_000 else float(value) * 1000
+    return millis if millis <= _MAX_RESET_AT_MILLIS else None
 
 
 def fetch_openai_oauth_usage(access_token: str, account_id: str | None) -> UsageSnapshot:
@@ -69,7 +76,7 @@ def fetch_openai_oauth_usage(access_token: str, account_id: str | None) -> Usage
             body = json.loads(response.read())
     except urllib.error.HTTPError as exc:
         return UsageSnapshot(available=False, message=f"HTTP {exc.code}")
-    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+    except (urllib.error.URLError, TimeoutError, OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         return UsageSnapshot(available=False, message=str(exc))
 
     if not isinstance(body, dict):
@@ -80,9 +87,15 @@ def fetch_openai_oauth_usage(access_token: str, account_id: str | None) -> Usage
     used_percent = primary.get("used_percent") if isinstance(primary, dict) else None
     reset_at = _reset_at_millis(primary.get("reset_at")) if isinstance(primary, dict) else None
 
+    valid_percent = (
+        isinstance(used_percent, (int, float))
+        and not isinstance(used_percent, bool)
+        and (not isinstance(used_percent, float) or math.isfinite(used_percent))
+        and 0 <= used_percent <= 100
+    )
     return UsageSnapshot(
         available=True,
-        used_percent=used_percent if isinstance(used_percent, (int, float)) else None,
+        used_percent=used_percent if valid_percent else None,
         plan_name=_plan_name(body.get("plan_type")),
         reset_at=reset_at,
         message="ok",

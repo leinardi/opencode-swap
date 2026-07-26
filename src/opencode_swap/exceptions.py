@@ -11,6 +11,10 @@ class AuthFileError(OpenCodeSwapError):
     """auth.json is missing, unreadable, or not valid JSON."""
 
 
+class BackupError(OpenCodeSwapError):
+    """A recovery snapshot is unreadable or has an invalid top-level shape."""
+
+
 class SchemaError(OpenCodeSwapError):
     """A provider's entry in auth.json doesn't match a known shape.
 

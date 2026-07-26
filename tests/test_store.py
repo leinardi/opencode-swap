@@ -1,3 +1,4 @@
+import base64
 import stat
 
 import keyring
@@ -5,6 +6,7 @@ import keyring.errors
 import pytest
 
 from opencode_swap import macos_keychain
+from opencode_swap.exceptions import SecretStoreError
 from opencode_swap.models import Platform
 from opencode_swap.store import SecretStore
 
@@ -90,10 +92,42 @@ def test_sticky_pin_never_retries_os_backend(tmp_path, mac_backend):
     mac_backend.fail = False  # backend "recovers" mid-run
     store.put("openai:other", "v2")
     store.get("openai:work")
-    store.delete("openai:work")
+    with pytest.raises(SecretStoreError):
+        store.delete("openai:work")
 
     assert mac_backend.calls == calls_after_failure  # never touched again
     assert store.get("openai:other") == "v2"
+
+
+def test_delete_os_failure_keeps_credential_and_surfaces_error(tmp_path, mac_backend):
+    store = SecretStore(tmp_path, platform=Platform.MACOS)
+    store.put("openai:work", "secret-value")
+    mac_backend.fail = True
+
+    with pytest.raises(SecretStoreError, match="could not confirm"):
+        store.delete("openai:work")
+
+    assert mac_backend.data[("opencode-swap", "openai:work")] == "secret-value"
+
+
+def test_confirmed_get_refuses_absence_when_os_backend_fails(tmp_path, mac_backend):
+    store = SecretStore(tmp_path, platform=Platform.MACOS)
+    mac_backend.fail = True
+
+    with pytest.raises(SecretStoreError, match=r"cannot confirm|could not confirm"):
+        store.get_confirmed("openai:work")
+
+    assert not store._file_path("openai:work").exists()
+
+
+def test_file_directory_is_private_before_secret_publication(tmp_path, monkeypatch):
+    store = SecretStore(tmp_path / "secrets", platform=Platform.UNKNOWN)
+
+    def check_private_directory(*args, **kwargs):
+        assert stat.S_IMODE(store._dir.stat().st_mode) == 0o700
+
+    monkeypatch.setattr("opencode_swap.store.atomic_write_bytes", check_private_directory)
+    store.put("openai:work", "secret-value")
 
 
 def test_file_wins_on_read_over_stale_os_value(tmp_path, mac_backend):
@@ -138,3 +172,120 @@ def test_unknown_platform_uses_file_backend_only(tmp_path):
     assert store.backend_name == "file"
     store.put("openai:work", "secret-value")
     assert store.get("openai:work") == "secret-value"
+
+
+@pytest.mark.parametrize("encoded", [b"not valid base64!", base64.b64encode(b"\xff")])
+def test_corrupt_file_secret_raises_content_free_store_error(tmp_path, encoded):
+    store = SecretStore(tmp_path, platform=Platform.UNKNOWN)
+    secret = "credential-not-in-error"
+    store._file_path("openai:work").write_bytes(encoded)
+
+    with pytest.raises(SecretStoreError) as exc_info:
+        store.get("openai:work")
+
+    assert secret not in str(exc_info.value)
+
+
+def test_new_fallback_filenames_are_injective(tmp_path):
+    store = SecretStore(tmp_path, platform=Platform.UNKNOWN)
+
+    assert store._file_path("openai:a_b") != store._file_path("openai_a:b")
+
+
+def test_reading_legacy_fallback_is_read_only_until_next_write(tmp_path):
+    store = SecretStore(tmp_path, platform=Platform.UNKNOWN)
+    key = "openai:work"
+    legacy_path = store._legacy_file_path(key)
+    legacy_path.write_bytes(base64.b64encode(b"secret-value"))
+
+    assert store.get(key) == "secret-value"
+    assert not store._file_path(key).exists()
+    store.put(key, "rotated-secret")
+    assert store.get(key) == "rotated-secret"
+    assert not legacy_path.exists()
+
+
+def test_new_opaque_key_never_reads_or_deletes_colliding_legacy_fallback(tmp_path):
+    store = SecretStore(tmp_path, platform=Platform.UNKNOWN)
+    old_key = "openai:a_b"
+    new_key = "openai_a:b"
+    legacy_path = store._legacy_file_path(old_key)
+    legacy_path.write_bytes(base64.b64encode(b"old-secret"))
+
+    assert store.get(new_key) is None
+    store.put(new_key, "new-secret")
+
+    assert legacy_path.exists()
+    assert store.get(old_key) == "old-secret"
+    assert store.get(new_key) == "new-secret"
+
+
+def test_legacy_probe_rejects_extra_separator_alias(tmp_path):
+    store = SecretStore(tmp_path, platform=Platform.UNKNOWN)
+    old_key = "openai:a_b"
+    alias_key = "openai:a:b"
+    legacy_path = store._legacy_file_path(old_key)
+    legacy_path.write_bytes(base64.b64encode(b"old-secret"))
+
+    assert store.get(alias_key) is None
+    store.put(alias_key, "new-secret")
+
+    assert legacy_path.exists()
+    assert store.get(old_key) == "old-secret"
+    assert store.get(alias_key) == "new-secret"
+
+
+def test_digest_fallback_filename_fits_maximum_account_name(tmp_path):
+    store = SecretStore(tmp_path, platform=Platform.UNKNOWN)
+    key = f"openai:{'a' * 130}"
+    legacy_path = store._legacy_file_path(key)
+    legacy_path.write_bytes(base64.b64encode(b"legacy-secret"))
+
+    assert len(store._file_path(key).name.encode()) <= 255
+    assert store.get(key) == "legacy-secret"
+    store.put(key, "rotated-secret")
+    assert store.get(key) == "rotated-secret"
+
+
+def test_overlong_legacy_candidate_skips_legacy_probe(tmp_path):
+    store = SecretStore(tmp_path, platform=Platform.UNKNOWN)
+    key = f"openai:{'a' * 300}"
+
+    assert store.get(key) is None
+    store.put(key, "secret-value")
+    assert store.get(key) == "secret-value"
+
+
+def test_missing_secrets_dir_uses_existing_parent_name_limit(tmp_path, monkeypatch):
+    store = SecretStore(tmp_path / "missing" / "secrets", platform=Platform.UNKNOWN)
+    key = "openai:work"
+
+    def name_max(path, name):
+        assert path == tmp_path
+        assert name == "PC_NAME_MAX"
+        return 10
+
+    monkeypatch.setattr("opencode_swap.store.os.pathconf", name_max)
+    monkeypatch.setattr(store, "_legacy_file_path", lambda *args: (_ for _ in ()).throw(AssertionError("must not probe legacy")))
+
+    assert store.get(key) is None
+
+
+def test_linux_reconciliation_publishes_v2_when_legacy_cleanup_fails(tmp_path, linux_backend, monkeypatch):
+    store = SecretStore(tmp_path, platform=Platform.LINUX)
+    key = "openai:work"
+    legacy_path = store._legacy_file_path(key)
+    legacy_path.write_bytes(base64.b64encode(b"stale-secret"))
+    original_unlink = type(legacy_path).unlink
+
+    def fail_legacy_unlink(path, *args, **kwargs):
+        if path == legacy_path:
+            raise OSError("legacy cleanup failed")
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(type(legacy_path), "unlink", fail_legacy_unlink)
+    store.put(key, "fresh-secret")
+
+    assert legacy_path.exists()
+    assert store._file_path(key).exists()
+    assert store.get(key) == "fresh-secret"

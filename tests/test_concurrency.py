@@ -70,6 +70,9 @@ def test_two_switcher_instances_racing_use_serialize_without_corruption(paths):
     t1.join(timeout=15)
     t2.join(timeout=15)
 
+    assert not t1.is_alive()
+    assert not t2.is_alive()
+    assert results.keys() == {"t1", "t2"}
     for key, outcome in results.items():
         assert not isinstance(outcome, Exception), f"{key} raised: {outcome}"
 
@@ -120,6 +123,7 @@ def test_many_concurrent_switches_leave_consistent_final_state(paths):
     for t in threads:
         t.join(timeout=30)
 
+    assert all(not t.is_alive() for t in threads)
     assert errors == []
     final = json.loads(auth_path.read_text())  # must parse cleanly
     assert final["openai"]["accountId"] in ("acct-a", "acct-b")

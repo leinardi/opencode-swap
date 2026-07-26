@@ -6,7 +6,8 @@ import re
 import sys
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import cast
+
+from opencode_swap.exceptions import RegistryError
 
 #: Account name validation: lowercase letters/digits/-/_/./@/+, non-empty,
 #: not leading '-' (argparse would read it as a flag) or '.' (keeps the file-
@@ -92,14 +93,41 @@ class AccountMeta:
         }
 
     @classmethod
-    def from_dict(cls, name: str, data: JsonObject) -> AccountMeta:
+    def from_dict(cls, name: str, data: object) -> AccountMeta:
+        try:
+            if normalize_account_name(name) != name:
+                raise ValueError("invalid account name")
+        except ValueError as exc:
+            raise RegistryError(f"registry account has invalid name {name!r}") from exc
+        if not isinstance(data, dict):
+            raise RegistryError(f"registry account {name!r} is not an object")
+
+        unexpected_fields = set(data) - {"provider", "type", "accountId", "email", "added"}
+        if unexpected_fields:
+            raise RegistryError(f"registry account {name!r} has unsupported fields")
+
+        provider = data.get("provider")
+        record_type = data.get("type", "oauth")
+        account_id = data.get("accountId")
+        email = data.get("email")
+        added = data.get("added", "")
+        if not isinstance(provider, str) or not provider:
+            raise RegistryError(f"registry account {name!r} has invalid provider")
+        if not isinstance(record_type, str) or not record_type:
+            raise RegistryError(f"registry account {name!r} has invalid type")
+        if account_id is not None and not isinstance(account_id, str):
+            raise RegistryError(f"registry account {name!r} has invalid accountId")
+        if email is not None and not isinstance(email, str):
+            raise RegistryError(f"registry account {name!r} has invalid email")
+        if not isinstance(added, str):
+            raise RegistryError(f"registry account {name!r} has invalid added timestamp")
         return cls(
             name=name,
-            provider=cast(str, data["provider"]),
-            type=cast(str, data.get("type", "oauth")),
-            account_id=cast(str | None, data.get("accountId")),
-            email=cast(str | None, data.get("email")),
-            added=cast(str, data.get("added", "")),
+            provider=provider,
+            type=record_type,
+            account_id=account_id,
+            email=email,
+            added=added,
         )
 
 

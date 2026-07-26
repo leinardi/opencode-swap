@@ -142,6 +142,52 @@ def test_use_self_switch_is_idempotent(switcher):
     assert live_openai(switcher.opencode_auth_path) == before
 
 
+def test_use_self_switch_keeps_rotated_credentials(switcher):
+    _setup_two_accounts(switcher)
+    switcher.use_account("a")
+    rotated = oauth_entry(account_id="acct-a", refresh="ra-rotated")
+    write_auth(switcher.opencode_auth_path, rotated)
+
+    switcher.use_account("a")
+
+    assert live_openai(switcher.opencode_auth_path)["refresh"] == "ra-rotated"
+    assert json.loads(switcher.secrets.get("openai:a"))["refresh"] == "ra-rotated"
+
+
+def test_use_rejects_malformed_stored_target_before_live_write(switcher):
+    _setup_two_accounts(switcher)
+    before = switcher.opencode_auth_path.read_text()
+    switcher.secrets.put("openai:a", json.dumps({"type": "oauth"}))
+
+    with pytest.raises(SchemaError):
+        switcher.use_account("a")
+
+    assert switcher.opencode_auth_path.read_text() == before
+
+
+def test_use_aborts_ambiguous_no_id_live_credential(switcher):
+    def fallback_entry(refresh):
+        entry = oauth_entry(account_id="unused", refresh=refresh, access=make_jwt({}))
+        del entry["accountId"]
+        return entry
+
+    write_auth(switcher.opencode_auth_path, fallback_entry("ra"))
+    switcher.add_account("a")
+    write_auth(switcher.opencode_auth_path, fallback_entry("rb"))
+    switcher.add_account("b")
+    switcher.use_account("a")
+    write_auth(switcher.opencode_auth_path, fallback_entry("ra-rotated"))
+
+    with pytest.raises(OpenCodeSwapError, match="refused to overwrite"):
+        switcher.use_account("b")
+
+    assert json.loads(switcher.secrets.get("openai:a"))["refresh"] == "ra"
+    assert live_openai(switcher.opencode_auth_path)["refresh"] == "ra-rotated"
+    unclaimed = list((switcher.data_root / "backups").glob("unclaimed-openai-*.json"))
+    assert len(unclaimed) == 1
+    assert json.loads(unclaimed[0].read_text())["refresh"] == "ra-rotated"
+
+
 def test_use_unclaimed_foreign_login_is_stashed(switcher):
     _setup_two_accounts(switcher)
     # An external `opencode auth login` to an account opencode-swap has

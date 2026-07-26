@@ -11,12 +11,11 @@ third-party ``keyring`` library:
   macOS can show the "wants to use your keychain" prompt. ``security``
   never changes, so creator == reader and there is no prompt.
 
-- ``set_password`` hex-encodes the value (``-X``) and pipes the command
-  through ``security -i`` (stdin) so the secret never appears in process
-  argv (a process-monitor concern). Falls back to argv only when the
-  command would overflow ``security -i``'s 4096-byte stdin line buffer,
-  which would otherwise truncate mid-argument and silently corrupt the
-  entry.
+ - ``set_password`` hex-encodes the value (``-X``) and pipes the command
+   through ``security -i`` (stdin) so the secret never appears in process
+   argv (a process-monitor concern). Values too large for ``security -i``'s
+   4096-byte stdin line buffer fail closed; SecretStore then uses its file
+   fallback rather than exposing a credential in argv.
 - ``get_password`` uses ``find-generic-password ... -w`` and treats exit
   code 44 as "not found" (returns ``None``); any *other* non-zero exit
   raises so callers can tell a genuine miss apart from a locked/denied/
@@ -104,13 +103,7 @@ def set_password(service: str, account: str, password: str) -> None:
                 check=False,
             )
         else:
-            result = subprocess.run(
-                [_SECURITY, "add-generic-password", "-U", "-a", account, "-s", service, "-X", hex_value],
-                capture_output=True,
-                text=True,
-                timeout=_TIMEOUT,
-                check=False,
-            )
+            raise KeychainError("security add-generic-password input exceeds safe stdin limit")
     except subprocess.TimeoutExpired as e:
         raise KeychainError(f"security add-generic-password timed out after {_TIMEOUT}s") from e
     if result.returncode != 0:

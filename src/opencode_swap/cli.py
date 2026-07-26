@@ -100,11 +100,11 @@ def cmd_list(switcher: Switcher, args: argparse.Namespace) -> int:
         print("No accounts saved. Run `opencode-swap add <name>` after logging into OpenCode.")
         return 0
 
-    active = switcher.registry.get_active()
+    active, _ = switcher.current()
     validity_tag = {Validity.OK: "", Validity.EXPIRED: " (expired)", Validity.INVALID: " (invalid!)"}
     for name in sorted(accounts):
         meta = accounts[name]
-        marker = "*" if name == active else " "
+        marker = "*" if active is not None and name == active.name else " "
         validity = switcher.account_validity(name)
         line = f"{marker} {name:<20} {_redact_account_id(meta.account_id):<8} {meta.email or '-':<28}{validity_tag[validity]}"
         if args.usage:
@@ -118,13 +118,29 @@ def _format_usage(snapshot: UsageSnapshot | None) -> str:
         return "  usage: n/a"
     if not snapshot.available:
         return f"  usage: unavailable ({snapshot.message})"
-    if snapshot.used_percent is None:
+    try:
+        valid_percent = (
+            isinstance(snapshot.used_percent, (int, float)) and not isinstance(snapshot.used_percent, bool) and math.isfinite(snapshot.used_percent)
+        )
+    except OverflowError:
+        valid_percent = False
+    if not valid_percent:
         return "  usage: n/a"
     parts = [f"{snapshot.used_percent:.0f}%"]
-    if snapshot.reset_at is not None:
-        days = math.ceil(max(0, snapshot.reset_at - time.time() * 1000) / 86_400_000)
-        reset_time = datetime.fromtimestamp(snapshot.reset_at / 1000)
-        parts[0] = f"{days}d {parts[0]} @{reset_time:%b} {reset_time.day}, {reset_time:%H:%M}"
+    reset_at = snapshot.reset_at
+    if isinstance(reset_at, (int, float)) and not isinstance(reset_at, bool):
+        try:
+            valid_reset = math.isfinite(reset_at)
+        except OverflowError:
+            valid_reset = False
+        if valid_reset:
+            try:
+                days = math.ceil(max(0, reset_at - time.time() * 1000) / 86_400_000)
+                reset_time = datetime.fromtimestamp(reset_at / 1000)
+            except (OverflowError, OSError, ValueError):
+                pass
+            else:
+                parts[0] = f"{days}d {parts[0]} @{reset_time:%b} {reset_time.day}, {reset_time:%H:%M}"
     if snapshot.plan_name:
         parts.append(snapshot.plan_name)
     return "  usage: " + ", ".join(parts)
@@ -146,10 +162,10 @@ def cmd_current(switcher: Switcher, args: argparse.Namespace) -> int:
 
 
 def _can_switch(assume_yes: bool) -> bool:
-    if process_detection.is_opencode_running() and not _confirm(
-        "OpenCode appears to be running; switching now could race an in-flight token refresh.",
-        assume_yes,
-    ):
+    prompt = "Switch OpenCode's active account?"
+    if process_detection.is_opencode_running():
+        prompt = "OpenCode appears to be running; switching now could race an in-flight token refresh. Switch anyway?"
+    if not _confirm(prompt, assume_yes):
         print("Aborted.", file=sys.stderr)
         return False
     return True
