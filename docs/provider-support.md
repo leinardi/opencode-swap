@@ -7,6 +7,8 @@ other entry below is implemented from OpenCode source, pinned plugin source,
 and synthetic automated tests. Maintainer does not have accounts for those
 services. Testers are wanted for every non-OpenAI provider; report provider,
 auth method, OpenCode version, and sanitized observations without credentials.
+Use [`provider-research-prompt.md`](provider-research-prompt.md) to generate a
+safe, source-backed report for a dedicated GitHub issue.
 
 OpenCode checkout analyzed at commit
 `7534d23551f665e65080809975b4ca5c7d63807b` (2026-07-25). External built-ins

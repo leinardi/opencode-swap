@@ -27,7 +27,9 @@ or released yet — run it from a local checkout with `uv`. See
 provider implementations were derived from OpenCode source and synthetic tests.
 Maintainer does not have accounts for those services, so testers are wanted for
 every non-OpenAI provider. Please report provider, auth method, OpenCode version,
-and sanitized failure details in an issue. Never include credentials.
+and sanitized failure details in an issue. Never include credentials. Use
+[`docs/provider-research-prompt.md`](docs/provider-research-prompt.md) for a
+copy-paste OpenCode prompt that gathers safe source evidence for one provider.
 
 ## Why not `opencode-balancer`?
 
@@ -215,6 +217,7 @@ for `opencode-balancer`.
 - [`docs/architecture.md`](docs/architecture.md) — module map, data flow, the switch algorithm, transaction/rollback design.
 - [`docs/opencode-auth.md`](docs/opencode-auth.md) — how OpenCode stores provider credentials and refreshes OpenAI credentials.
 - [`docs/provider-support.md`](docs/provider-support.md) — provider matrix, source evidence, live-testing status, and deferred OAuth cases.
+- [`docs/provider-research-prompt.md`](docs/provider-research-prompt.md) — safe copy-paste prompt for provider-research issues.
 - [`docs/security.md`](docs/security.md) — threat model, storage mechanism comparison, what's explicitly out of scope.
 - [`docs/testing.md`](docs/testing.md) — testing strategy and how to run the suite.
 - [`docs/roadmap.md`](docs/roadmap.md) — milestone status.
