@@ -22,6 +22,7 @@ import time
 from opencode_swap.exceptions import SchemaError
 from opencode_swap.models import AccountDesc, AuthRecord, JsonObject, Validity
 from opencode_swap.oauth_jwt import decode_claims, extract_account_id, extract_email
+from opencode_swap.providers.common import credential_values, is_json_number, require_expiry
 
 PROVIDER_ID = "openai"
 
@@ -45,10 +46,8 @@ def _optional_str(raw: JsonObject, field: str, entry_type: str) -> str | None:
 def _json_value(value: object) -> bool:
     if value is None or isinstance(value, (str, bool)):
         return True
-    if isinstance(value, int) and not isinstance(value, bool):
-        return abs(value) <= (1 << 1023)
-    if isinstance(value, float):
-        return math.isfinite(value)
+    if is_json_number(value):
+        return True
     if isinstance(value, list):
         return all(_json_value(item) for item in value)
     if isinstance(value, dict):
@@ -71,9 +70,6 @@ def _safe_display(value: object, record: JsonObject) -> str | None:
 class OpenAiProvider:
     id = PROVIDER_ID
 
-    def keys(self) -> list[str]:
-        return [PROVIDER_ID]
-
     def extract(self, auth: JsonObject) -> AuthRecord | None:
         raw = auth.get(PROVIDER_ID)
         if raw is None:
@@ -87,15 +83,7 @@ class OpenAiProvider:
         if entry_type == "oauth":
             _require_str(raw, "refresh", "oauth")
             _require_str(raw, "access", "oauth")
-            expires = raw.get("expires")
-            if (
-                isinstance(expires, bool)
-                or not isinstance(expires, (int, float))
-                or (isinstance(expires, float) and not math.isfinite(expires))
-                or not _json_value(expires)
-                or expires < 0
-            ):
-                raise SchemaError("openai oauth entry has invalid 'expires'")
+            require_expiry(raw, PROVIDER_ID)
             _optional_str(raw, "accountId", "oauth")
             _optional_str(raw, "enterpriseUrl", "oauth")
         elif entry_type == "api":
@@ -135,6 +123,14 @@ class OpenAiProvider:
             token = record.raw.get("token")
             return f"wellknown\0{key if isinstance(key, str) else ''}\0{token if isinstance(token, str) else ''}"
         raise SchemaError("unknown openai auth type")
+
+    def identity_is_stable(self, record: AuthRecord) -> bool:
+        if record.type != "oauth":
+            return True
+        return self.identity(record).startswith("oauth-account\0")
+
+    def credential_values(self, record: AuthRecord) -> set[str]:
+        return credential_values(record)
 
     def describe(self, record: AuthRecord) -> AccountDesc:
         if record.type == "oauth":

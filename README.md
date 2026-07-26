@@ -2,15 +2,15 @@
 
 **Multi-account switcher for [OpenCode](https://github.com/anomalyco/opencode)** — the
 same idea as [claude-swap](https://github.com/realiti4/claude-swap), applied to
-OpenCode's OpenAI (ChatGPT) accounts.
+OpenCode provider accounts.
 
-OpenCode has no built-in way to keep several OpenAI accounts around and flip
+OpenCode has no built-in way to keep several accounts for one provider around and flip
 between them. `opencode-swap` is a small standalone CLI that does exactly
 that: it keeps a securely-stored copy of each account's OpenCode auth state
 and swaps the one OpenCode currently considers "active."
 
 ```bash
-opencode-swap use personal && opencode
+opencode-swap use openai personal && opencode
 ```
 
 That's the whole workflow. No OpenCode plugin, no background process, no
@@ -18,13 +18,16 @@ proxy — `opencode-swap` isn't running while OpenCode is.
 
 ## Status
 
-Early / self-hosted. The core is implemented and tested (280 tests) and has
+Early / self-hosted. Core behavior is covered by automated tests and has
 been exercised against a real OpenCode installation, but it isn't packaged
 or released yet — run it from a local checkout with `uv`. See
 [`docs/roadmap.md`](docs/roadmap.md) for what's done and what's left.
 
-v1 scope: **OpenAI accounts only**, on **Linux and macOS**. See
-[Scope](#scope) below.
+**OpenAI is the only provider tested end to end with real accounts.** Other
+provider implementations were derived from OpenCode source and synthetic tests.
+Maintainer does not have accounts for those services, so testers are wanted for
+every non-OpenAI provider. Please report provider, auth method, OpenCode version,
+and sanitized failure details in an issue. Never include credentials.
 
 ## Why not `opencode-balancer`?
 
@@ -58,11 +61,11 @@ and `ocs` on your `PATH`.
 opencode auth login
 
 # 2. Import whichever account is currently active into opencode-swap.
-opencode-swap add personal
+opencode-swap add openai personal
 
 # 3. Log into a second account.
 opencode auth login   # choose/authenticate a different ChatGPT account
-opencode-swap add work
+opencode-swap add openai work
 
 # 4. See what's saved.
 opencode-swap list
@@ -70,25 +73,25 @@ opencode-swap list
 # * work       ...ef01   -
 
 # 5. Switch whenever you like.
-opencode-swap use personal
+opencode-swap use openai personal
 opencode
 ```
 
 Names are yours to choose (lowercase letters/digits/`-`/`_`/`.`). Re-running
-`add` with the name of an already-imported account just refreshes its stored
+`add` with the provider and name of an already-imported account refreshes its stored
 tokens in place — it won't create a duplicate.
 
 ## Commands
 
 | Command | Description |
 | --- | --- |
-| `opencode-swap add <name>` | Import the currently-active OpenAI account into secure storage under `<name>`. |
-| `opencode-swap list` | List saved accounts, with an active marker, truncated account id, and expiry/validity flag. |
-| `opencode-swap current` | Show which saved account (if any) OpenCode is currently using. |
-| `opencode-swap use <name> [-y]` | Switch OpenCode's active OpenAI account to `<name>`. |
-| `opencode-swap switch [-y]` | Switch to next saved OpenAI account, wrapping around after the last account. |
-| `opencode-swap remove <name> [-y]` | Delete a saved account (from both the registry and the secret store). |
-| `opencode-swap rename <old> <new>` | Rename a saved account. |
+| `opencode-swap add <provider> <name>` | Import the provider's currently-active account under `<name>`. |
+| `opencode-swap list [provider]` | List every saved account, or filter by provider. |
+| `opencode-swap current [provider]` | Show active managed accounts for every provider, or one provider. |
+| `opencode-swap use <provider> <name> [-y]` | Activate one saved provider account. |
+| `opencode-swap switch <provider> [-y]` | Switch to next saved account for provider. |
+| `opencode-swap remove <provider> <name> [-y]` | Delete a saved provider account. |
+| `opencode-swap rename <provider> <old> <new>` | Rename a saved provider account. |
 | `opencode-swap export <path>` | Export all saved accounts to a new password-encrypted `.ocs` archive. |
 | `opencode-swap import <path>` | Import accounts from an encrypted archive; prompts to skip or overwrite existing names. |
 | `opencode-swap restore [--pristine] [-y]` | Recover `auth.json` from the most recent pre-switch backup, or from the very first snapshot ever taken (`--pristine`). |
@@ -112,7 +115,7 @@ opencode-swap export ~/opencode-accounts.ocs
 
 # Transfer the archive, then on the destination computer
 opencode-swap import ~/opencode-accounts.ocs
-opencode-swap use personal
+opencode-swap use openai personal
 ```
 
 `export` asks for a password twice; `import` asks for it once. Password input
@@ -121,7 +124,7 @@ printed. The archive is AES-256 encrypted and created with `0600` permissions.
 When an export path has no extension, `export` asks whether to append `.ocs`
 (default: yes). Repositories using this project's `.gitignore` ignore `*.ocs`
 to reduce risk of accidentally committing an account archive.
-Import validates every account and checks all destination names and identities
+Import validates every account and checks all destination provider/name pairs and identities
 before writing anything. For existing account names, it offers `skip`,
 `skip-all`, `overwrite`, `overwrite-all`, and `abort`. Identity conflicts under
 different names still abort because there is no unambiguous overwrite target.
@@ -138,15 +141,39 @@ the registry-active account, rather than risk archiving stale rotated tokens.
 The short version: OpenCode keeps all of its provider credentials in a
 single JSON file, `~/.local/share/opencode/auth.json`, and re-reads it fresh
 on every request — no restart required to pick up a change. The entire unit
-of "which OpenAI account is active" is the `"openai"` key of that file.
+of "which account is active" is one top-level provider key in that file.
 `opencode-swap` keeps a copy of each account's record in your OS
-keychain/keyring, and `use <name>` atomically replaces that one key.
+keychain/keyring, and `use <provider> <name>` atomically replaces that one key.
 
 The interesting part is what happens *between* switches: OpenCode rotates
 the access and refresh token in place whenever it refreshes, so a naively
 cached copy would go stale. `opencode-swap` captures that rotation back into
 its own storage every time you switch *away* from an account, before
-overwriting it with another.
+overwriting it with another. Providers using static API keys do not rotate
+credentials, but use the same atomic switching path.
+
+### Provider support
+
+| Provider/auth class | Status |
+| --- | --- |
+| OpenAI API key and ChatGPT OAuth | Supported; only end-to-end tested provider |
+| Any provider using OpenCode's canonical `{"type":"api","key":"..."}` record | Supported generically; testers wanted |
+| GitHub Copilot OAuth | Supported from OpenCode source analysis; testers wanted |
+| Poe API/OAuth | Supported from pinned plugin source analysis; testers wanted |
+| xAI API/OAuth | API supported; OAuth requires access JWT with stable `iss`/`sub`; testers wanted |
+| GitLab and Snowflake API/PAT | Supported through generic API handling; testers wanted |
+| GitLab and Snowflake OAuth | Not supported: OpenCode does not persist a provably stable per-user identity |
+| Well-known URL auth and unknown OAuth plugins | Not supported |
+
+Same account name may exist under different providers. `openai:work` and
+`anthropic:work` are separate accounts. Provider IDs must match keys in
+OpenCode's `auth.json` exactly.
+
+Upgrading an existing installation automatically migrates registry v1 to
+provider-scoped registry v2 while holding opencode-swap's lock. Existing
+keychain/keyring entries are not rewritten because their keys were already
+`<provider>:<name>`. Original registry is retained as
+`registry.v1.json.bak`; publication of v2 registry is atomic.
 
 Full details, including the exact OpenCode internals this was reverse
 engineered from and the switch algorithm's failure-recovery guarantees, are
@@ -171,14 +198,14 @@ No plaintext database. Full threat model in
 
 ## Scope
 
-**In scope (v1):** standalone CLI, Linux + macOS, OpenCode's OpenAI/ChatGPT
-accounts, secure multi-account storage, transactional switching with
+**In scope:** standalone CLI, Linux + macOS, OpenCode provider accounts with
+known safe identity semantics, secure multi-account storage, transactional switching with
 rollback, backup/recovery, an architecture that doesn't need a rewrite to
-add a second provider later.
+add provider-specific behavior without changing safe I/O machinery.
 
 **Out of scope:** being an OpenCode plugin, load balancing / round-robin,
-runtime request interception, a local proxy, Windows, providers other than
-OpenAI (for now), reimplementing or modifying OpenCode, cloud sync, a GUI/TUI.
+runtime request interception, a local proxy, Windows, unsupported/ambiguous
+OAuth providers, reimplementing or modifying OpenCode, cloud sync, a GUI/TUI.
 
 The mental model is **"claude-swap, but for OpenCode"** — not a replacement
 for `opencode-balancer`.
@@ -186,7 +213,8 @@ for `opencode-balancer`.
 ## Documentation
 
 - [`docs/architecture.md`](docs/architecture.md) — module map, data flow, the switch algorithm, transaction/rollback design.
-- [`docs/opencode-auth.md`](docs/opencode-auth.md) — how OpenCode itself stores and refreshes OpenAI credentials (the reverse-engineered ground truth this tool depends on).
+- [`docs/opencode-auth.md`](docs/opencode-auth.md) — how OpenCode stores provider credentials and refreshes OpenAI credentials.
+- [`docs/provider-support.md`](docs/provider-support.md) — provider matrix, source evidence, live-testing status, and deferred OAuth cases.
 - [`docs/security.md`](docs/security.md) — threat model, storage mechanism comparison, what's explicitly out of scope.
 - [`docs/testing.md`](docs/testing.md) — testing strategy and how to run the suite.
 - [`docs/roadmap.md`](docs/roadmap.md) — milestone status.

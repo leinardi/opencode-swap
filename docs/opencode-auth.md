@@ -1,6 +1,6 @@
-# OpenCode's OpenAI authentication (reverse-engineered ground truth)
+# OpenCode authentication storage (reverse-engineered ground truth)
 
-Everything in this file was verified by reading OpenCode's own source
+Common storage behavior and OpenAI details here were verified by reading OpenCode's own source
 (`packages/opencode/src/auth/index.ts`,
 `packages/opencode/src/plugin/openai/codex.ts`,
 `packages/core/src/global.ts`, `packages/core/src/fs-util.ts` — as of the
@@ -50,7 +50,7 @@ Env var behavior **(source)**:
   detect whether *its own* process has this set (`doctor` warns if so) —
   it cannot know whether some other OpenCode process has it set.
 
-## The record shape
+## Common record shapes
 
 `auth.json` is a flat JSON object keyed by provider id. The OpenAI entry,
 when logged in via ChatGPT OAuth, has this shape **(source,
@@ -68,11 +68,12 @@ when logged in via ChatGPT OAuth, has this shape **(source,
 }
 ```
 
-Two other shapes exist for the same provider key **(source)**:
+Two other shapes exist for provider keys **(source)**:
 `{"type": "api", "key": "...", "metadata"?: {...}}` for a manually-entered
 API key, and `{"type": "wellknown", "key": "...", "token": "..."}`. All
 other provider keys (e.g. `"anthropic"`) coexist in the same flat object and
-are untouched by anything OpenAI-specific.
+are untouched by operations targeting another provider. Shared shape does not
+imply shared OAuth behavior; see `docs/provider-support.md`.
 
 `accountId`, when present, comes from the JWT's `chatgpt_account_id` claim,
 or `["https://api.openai.com/auth"].chatgpt_account_id`, or

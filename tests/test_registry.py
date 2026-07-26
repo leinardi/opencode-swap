@@ -139,7 +139,62 @@ def test_registry_metadata_allows_registered_future_providers(tmp_path):
     path = tmp_path / "registry.json"
     path.write_text(json.dumps({"version": 1, "active": None, "accounts": {"work": {"provider": "future", "type": "oauth"}}}))
 
-    assert Registry(path).accounts()["work"].provider == "future"
+    registry = Registry(path)
+    assert registry.migrate()
+    assert registry.accounts("future")["work"].provider == "future"
+
+
+def test_migrate_v1_preserves_accounts_active_and_backup(tmp_path):
+    path = tmp_path / "registry.json"
+    original = {
+        "version": 1,
+        "active": "work",
+        "accounts": {"work": make_meta("work").to_dict()},
+    }
+    path.write_text(json.dumps(original))
+    registry = Registry(path)
+
+    assert registry.migrate()
+    assert registry.accounts()["work"].account_id == "acct-1"
+    assert registry.get_active() == "work"
+    assert json.loads((tmp_path / "registry.v1.json.bak").read_text()) == original
+    assert json.loads(path.read_text())["version"] == 2
+
+
+def test_migrate_tightens_existing_identical_backup_permissions(tmp_path):
+    path = tmp_path / "registry.json"
+    original = {"version": 1, "active": None, "accounts": {"work": make_meta("work").to_dict()}}
+    path.write_text(json.dumps(original))
+    backup = tmp_path / "registry.v1.json.bak"
+    backup.write_text(json.dumps(original))
+    backup.chmod(0o644)
+
+    assert Registry(path).migrate()
+    assert stat.S_IMODE(backup.stat().st_mode) == 0o600
+
+
+def test_same_name_is_scoped_by_provider(tmp_path):
+    registry = Registry(tmp_path / "registry.json")
+    registry.upsert_account(make_meta("work"))
+    registry.upsert_account(make_meta("work", provider="anthropic", type="api"))
+
+    assert set(registry.scoped_accounts()) == {("openai", "work"), ("anthropic", "work")}
+
+
+def test_migrate_rejects_invalid_provider_without_changing_v1(tmp_path):
+    path = tmp_path / "registry.json"
+    original = {
+        "version": 1,
+        "active": None,
+        "accounts": {"work": make_meta("work", provider="bad\nprovider").to_dict()},
+    }
+    path.write_text(json.dumps(original))
+
+    with pytest.raises(RegistryError, match="invalid provider"):
+        Registry(path).migrate()
+
+    assert json.loads(path.read_text()) == original
+    assert not (tmp_path / "registry.v1.json.bak").exists()
 
 
 def test_registry_never_contains_secret_fields(tmp_path):

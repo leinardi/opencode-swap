@@ -8,6 +8,7 @@ from opencode_swap.providers.openai import OpenAiProvider
 from tests.helpers import make_jwt
 
 provider = OpenAiProvider()
+FRACTIONAL_EXPIRY = 1_730_000_000_000.5
 
 
 def oauth_entry(**overrides):
@@ -31,6 +32,11 @@ def test_extract_valid_oauth():
     record = provider.extract(auth)
     assert record.type == "oauth"
     assert record.raw["accountId"] == "acct-1"
+
+
+def test_extract_accepts_finite_fractional_expiry():
+    record = provider.extract({"openai": oauth_entry(expires=FRACTIONAL_EXPIRY)})
+    assert record.raw["expires"] == FRACTIONAL_EXPIRY
 
 
 def test_extract_valid_api():

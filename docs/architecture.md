@@ -32,7 +32,9 @@ src/opencode_swap/
                        SwitchTransaction, Platform, normalize_account_name
   opencode_auth.py     read/atomic-write of OpenCode's auth.json (whole-file, generic)
   providers/base.py    the Provider protocol (the one seam that varies per provider)
-  providers/openai.py  the only Provider implementation in v1
+  providers/api.py     generic canonical API-key provider
+  providers/openai.py  OpenAI API/OAuth behavior
+  providers/*.py       OAuth behavior proven safe for specific providers
   oauth_jwt.py         JWT claim decoding (accountId/email extraction) — no network
   paths.py             resolves OpenCode's auth.json path and opencode-swap's own data dir
   backup.py            .bak / .pristine / unclaimed-*.json snapshots
@@ -51,25 +53,26 @@ Responsibility boundaries are deliberate:
   I/O.
 - `providers/openai.py` knows nothing about *how* auth.json is read/written,
   or where secrets are stored — it only interprets one key's record.
-- `store.py` knows nothing about accounts or providers — it's a generic
-  string key-value secret store plus a generic name→metadata registry.
+- `SecretStore` knows nothing about accounts or providers; `Registry` owns
+  provider-scoped non-secret account metadata and active hints.
 - `switcher.py` is the only module that ties all of the above together into
   actual operations, and the only place that holds the lock.
 
-This means adding a second provider is: write a new `providers/xyz.py`
-implementing the `Provider` protocol, register it in `providers/__init__.py`,
-and nothing else changes. `switcher.py` already dispatches by
-`meta.provider` / a `provider_id` parameter throughout.
+Static API-key providers use `ApiProvider` without registration. OAuth is
+registered explicitly because the common OpenCode record shape does not imply
+common refresh, expiry, or identity behavior. Adding OAuth support requires a
+provider implementation plus source evidence and tests for those semantics.
 
 ## The Provider seam
 
 ```python
 class Provider(Protocol):
     id: str
-    def keys(self) -> list[str]
     def extract(self, auth: dict) -> AuthRecord | None
     def splice(self, auth: dict, record: AuthRecord) -> dict
     def identity(self, record: AuthRecord) -> str
+    def identity_is_stable(self, record: AuthRecord) -> bool
+    def credential_values(self, record: AuthRecord) -> set[str]
     def describe(self, record: AuthRecord) -> AccountDesc
     def validate(self, record: AuthRecord) -> Validity
 ```
@@ -82,25 +85,28 @@ providers that don't exist yet. In particular there's no
 read/write is generic (`opencode_auth.py`), so a provider only needs to
 know how to read and write *its own* corner of the file.
 
-`identity()` deserves a note: for an OAuth record it prefers the OpenAI
+`identity()` deserves a note: for OpenAI OAuth it prefers the OpenAI
 `accountId` claim, falling back to the raw refresh token string if no
 account id is available yet. This mirrors `opencode-balancer`'s
 `authIdentityKey` approach (a second, independent implementation that
 arrived at the same fallback chain from reading the same OpenCode source),
 and is why `AccountMeta` (the *non-secret* registry) deliberately never
-caches the identity string — the refresh-token fallback would otherwise leak
+caches the identity string. `identity_is_stable()` tells orchestration whether
+token rotation can change that value, replacing the old OpenAI-prefix check.
+The refresh-token fallback would otherwise leak
 a secret into `registry.json`.
 
 ## Storage layout
 
 ```
 $XDG_DATA_HOME/opencode-swap/            (0700)
-  registry.json                          (0600) — name -> {provider, type, accountId, email, added}
+  registry.json                          (0600) — provider -> name -> metadata; active per provider
+  registry.v1.json.bak                   (0600) — original registry retained after v1 migration
   backups/                               (0700)
     auth.json.bak                        (0600) — most recent pre-switch snapshot
     auth.json.pristine                   (0600) — first-ever snapshot, written once
     auth.json.restore                    (0600) — temporary restore source; retained if restore fails
-    unclaimed-<provider>-<ts>-<suffix>.json (0600) — foreign login preserved instead of overwritten
+    unclaimed-<provider-hash>-<ts>-<suffix>.json (0600) — foreign login preserved instead of overwritten
   secrets/                               (0700, only created if the file fallback is used)
     v2-<sha256-key>.enc                  (0600) — base64-obfuscated record, fallback only;
                                           legacy openai_<name>.enc files migrate on write
@@ -115,12 +121,16 @@ each saved account lives in the OS keychain (macOS) / keyring (Linux) under
 service `opencode-swap`, keyed by `"<provider>:<name>"`, or in the `secrets/`
 fallback files when no keychain/keyring is reachable.
 
+Registry v2 scopes account names and active hints by provider. Migration from
+v1 is atomic and does not move secrets because v1 already used provider-scoped
+secret keys. A durable v1 registry backup is written before v2 publication.
+
 ## The switch algorithm (`Switcher.use_account`)
 
 ```
-use <target>:
+use <provider> <target>:
   acquire FileLock(data_root/.lock)                    # serialize our own invocations
-  target = registry.accounts()[name]                   # error if unknown
+  target = registry.accounts()[provider][name]         # error if unknown
   target_record = secrets.get("<provider>:<name>")      # error if missing (out-of-sync store)
 
   live = read auth.json (or {} if it doesn't exist yet)
@@ -138,7 +148,7 @@ use <target>:
   backup.write_bak(live)                                 # pre-swap snapshot
   new_auth = provider.splice(live, target_record)         # merge into a fresh copy
   atomic_write_auth(new_auth)                             # temp(0600) + os.replace
-  registry.set_active(name)
+  registry.set_active(provider, name)
 
   release lock
 ```
@@ -178,7 +188,7 @@ call fails (disk error, corrupt registry, etc.) — without rollback, OpenCode
 would be left running the new account while opencode-swap's own bookkeeping
 still thought the old one was active.
 
-Note `registry.json`'s `active` field is informational only — `current()`
+Note `registry.json`'s per-provider `active` field is informational only — `current()`
 always re-derives "who's actually active" by matching the live record's
 identity against saved accounts, not by trusting the `active` field. This is
 deliberate: even if `set_active` silently drifted, `current` still reports
@@ -219,7 +229,8 @@ secrets and remove newly written secrets. Printable metadata is derived from
 validated records and filtered against credential fields from every account in
 the archive, preventing one account's token from entering another account's
 registry metadata. Import never changes OpenCode's live `auth.json` or the
-destination registry's active marker.
+destination registry's active markers. Archive v2 scopes conflicts by
+`(provider, name)` and import remains compatible with archive v1.
 
 ## Concurrency
 

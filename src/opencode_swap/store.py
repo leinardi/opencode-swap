@@ -37,17 +37,18 @@ import binascii
 import hashlib
 import json
 import os
+import stat
 from contextlib import suppress
 from pathlib import Path
-from typing import cast
 
 from opencode_swap import macos_keychain
-from opencode_swap.atomic import atomic_write_bytes, atomic_write_json
+from opencode_swap.atomic import atomic_write_bytes, atomic_write_json, atomic_write_json_exclusive
 from opencode_swap.exceptions import RegistryError, SecretStoreError
-from opencode_swap.models import AccountMeta, JsonObject, Platform, normalize_account_name
+from opencode_swap.models import AccountKey, AccountMeta, JsonObject, Platform, normalize_account_name, normalize_provider_id
 
 SERVICE_NAME = "opencode-swap"
-REGISTRY_VERSION = 1
+REGISTRY_VERSION = 2
+REGISTRY_V1_BACKUP = "registry.v1.json.bak"
 _LEGACY_KEY_PREFIX = "openai:"
 _FALLBACK_NAME_MAX = 255
 
@@ -244,47 +245,132 @@ class Registry:
     def __init__(self, path: Path):
         self._path = path
 
-    def _load(self) -> JsonObject:
+    @staticmethod
+    def _verify_existing_v1_backup(path: Path, data: JsonObject) -> None:
+        try:
+            backup_stat = path.lstat()
+            if not stat.S_ISREG(backup_stat.st_mode):
+                raise RegistryError(f"existing registry migration backup at {path} is not a regular file")
+            previous = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RegistryError(f"could not verify existing registry migration backup at {path}") from exc
+        if previous != data:
+            raise RegistryError(f"refusing registry migration because {path} contains a different backup")
+        path.chmod(0o600)
+
+    def migrate(self) -> bool:
+        """Atomically migrate registry v1; secret-store keys already use provider scope."""
         if not self._path.exists():
-            return {"version": REGISTRY_VERSION, "active": None, "accounts": {}}
+            return False
+        data = self._read_json()
+        if data.get("version") == REGISTRY_VERSION:
+            return False
+        if data.get("version") != 1 or set(data) != {"version", "active", "accounts"}:
+            raise RegistryError(f"{self._path} has an unsupported registry version")
+        old_accounts = data.get("accounts")
+        old_active = data.get("active")
+        if not isinstance(old_accounts, dict) or (old_active is not None and not isinstance(old_active, str)):
+            raise RegistryError(f"{self._path} does not look like a valid opencode-swap registry")
+
+        nested: JsonObject = {}
+        active: JsonObject = {}
+        for name, raw_meta in old_accounts.items():
+            if not isinstance(name, str):
+                raise RegistryError(f"{self._path} has an invalid account name")
+            meta = AccountMeta.from_dict(name, raw_meta)
+            try:
+                normalize_provider_id(meta.provider)
+            except ValueError as exc:
+                raise RegistryError(f"{self._path} has an invalid provider id") from exc
+            provider_accounts = nested.setdefault(meta.provider, {})
+            assert isinstance(provider_accounts, dict)
+            provider_accounts[name] = meta.to_dict()
+            if old_active == name:
+                active[meta.provider] = name
+        if old_active is not None and not active:
+            raise RegistryError(f"{self._path} has an invalid active account")
+
+        backup_path = self._path.with_name(REGISTRY_V1_BACKUP)
+        try:
+            atomic_write_json_exclusive(backup_path, data)
+        except FileExistsError:
+            self._verify_existing_v1_backup(backup_path, data)
+        self._save({"version": REGISTRY_VERSION, "active": active, "accounts": nested})
+        return True
+
+    def _read_json(self) -> JsonObject:
         try:
             data = json.loads(self._path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise RegistryError(f"could not read registry at {self._path}: {exc}") from exc
+        if not isinstance(data, dict):
+            raise RegistryError(f"{self._path} does not look like a valid opencode-swap registry")
+        return data
+
+    def _load(self) -> JsonObject:
+        if not self._path.exists():
+            return {"version": REGISTRY_VERSION, "active": {}, "accounts": {}}
+        data = self._read_json()
         if not isinstance(data, dict) or set(data) != {"version", "active", "accounts"}:
             raise RegistryError(f"{self._path} does not look like a valid opencode-swap registry")
         if type(data["version"]) is not int or data["version"] != REGISTRY_VERSION:
             raise RegistryError(f"{self._path} has an unsupported registry version")
-        if not isinstance(data["accounts"], dict):
+        if not isinstance(data["accounts"], dict) or not isinstance(data["active"], dict):
             raise RegistryError(f"{self._path} does not look like a valid opencode-swap registry")
+        accounts = data["accounts"]
         active = data["active"]
-        if active is not None:
+        assert isinstance(accounts, dict) and isinstance(active, dict)
+        for provider_id, provider_accounts in accounts.items():
             try:
-                valid_active = isinstance(active, str) and normalize_account_name(active) == active and active in data["accounts"]
-            except ValueError:
-                valid_active = False
-            if not valid_active:
+                normalize_provider_id(provider_id)
+            except (TypeError, ValueError) as exc:
+                raise RegistryError(f"{self._path} has an invalid provider id") from exc
+            if not isinstance(provider_accounts, dict):
+                raise RegistryError(f"{self._path} has invalid provider accounts")
+            for name, meta in provider_accounts.items():
+                parsed = AccountMeta.from_dict(name, meta)
+                if parsed.provider != provider_id:
+                    raise RegistryError(f"registry account {name!r} has mismatched provider")
+        for provider_id, name in active.items():
+            provider_accounts = accounts.get(provider_id)
+            if not isinstance(name, str) or not isinstance(provider_accounts, dict) or name not in provider_accounts:
                 raise RegistryError(f"{self._path} has an invalid active account")
-        return cast(JsonObject, data)
+        return data
 
     def _save(self, data: JsonObject) -> None:
         atomic_write_json(self._path, data)
 
-    def accounts(self) -> dict[str, AccountMeta]:
+    def scoped_accounts(self, provider_id: str | None = None) -> dict[AccountKey, AccountMeta]:
         data = self._load()
         accounts = data["accounts"]
         assert isinstance(accounts, dict)
-        return {name: AccountMeta.from_dict(name, meta) for name, meta in accounts.items()}
+        result: dict[AccountKey, AccountMeta] = {}
+        for stored_provider, provider_accounts in accounts.items():
+            if provider_id is not None and stored_provider != provider_id:
+                continue
+            assert isinstance(stored_provider, str) and isinstance(provider_accounts, dict)
+            for name, meta in provider_accounts.items():
+                assert isinstance(name, str)
+                result[(stored_provider, name)] = AccountMeta.from_dict(name, meta)
+        return result
 
-    def get_active(self) -> str | None:
+    def accounts(self, provider_id: str | None = None) -> dict[str, AccountMeta]:
+        """Return name-keyed accounts for one provider; defaults to OpenAI."""
+        selected_provider = provider_id or "openai"
+        return {name: meta for (_provider, name), meta in self.scoped_accounts(selected_provider).items()}
+
+    def get_active(self, provider_id: str = "openai") -> str | None:
         active = self._load().get("active")
-        return active if isinstance(active, str) else None
+        value = active.get(provider_id) if isinstance(active, dict) else None
+        return value if isinstance(value, str) else None
 
     def upsert_account(self, meta: AccountMeta) -> None:
         data = self._load()
         accounts = data["accounts"]
         assert isinstance(accounts, dict)
-        accounts[meta.name] = meta.to_dict()
+        provider_accounts = accounts.setdefault(meta.provider, {})
+        assert isinstance(provider_accounts, dict)
+        provider_accounts[meta.name] = meta.to_dict()
         self._save(data)
 
     def add_accounts(self, metas: list[AccountMeta]) -> None:
@@ -292,11 +378,13 @@ class Registry:
         data = self._load()
         accounts = data["accounts"]
         assert isinstance(accounts, dict)
-        collisions = [meta.name for meta in metas if meta.name in accounts]
+        collisions = [meta.name for meta in metas if isinstance(accounts.get(meta.provider), dict) and meta.name in accounts[meta.provider]]
         if collisions:
             raise RegistryError(f"account already exists: {collisions[0]}")
         for meta in metas:
-            accounts[meta.name] = meta.to_dict()
+            provider_accounts = accounts.setdefault(meta.provider, {})
+            assert isinstance(provider_accounts, dict)
+            provider_accounts[meta.name] = meta.to_dict()
         self._save(data)
 
     def upsert_accounts(self, metas: list[AccountMeta]) -> None:
@@ -305,36 +393,53 @@ class Registry:
         accounts = data["accounts"]
         assert isinstance(accounts, dict)
         for meta in metas:
-            accounts[meta.name] = meta.to_dict()
+            provider_accounts = accounts.setdefault(meta.provider, {})
+            assert isinstance(provider_accounts, dict)
+            provider_accounts[meta.name] = meta.to_dict()
         self._save(data)
 
-    def remove_account(self, name: str) -> None:
+    def remove_account(self, name: str, provider_id: str = "openai") -> None:
         data = self._load()
         accounts = data["accounts"]
         assert isinstance(accounts, dict)
-        accounts.pop(name, None)
-        if data.get("active") == name:
-            data["active"] = None
+        provider_accounts = accounts.get(provider_id)
+        if isinstance(provider_accounts, dict):
+            provider_accounts.pop(name, None)
+            if not provider_accounts:
+                accounts.pop(provider_id, None)
+        active = data["active"]
+        assert isinstance(active, dict)
+        if active.get(provider_id) == name:
+            active.pop(provider_id, None)
         self._save(data)
 
-    def rename_account(self, old: str, new: str) -> None:
+    def rename_account(self, old: str, new: str, provider_id: str = "openai") -> None:
         data = self._load()
         accounts = data["accounts"]
         assert isinstance(accounts, dict)
-        if old not in accounts:
+        provider_accounts = accounts.get(provider_id)
+        if not isinstance(provider_accounts, dict) or old not in provider_accounts:
             raise RegistryError(f"no such account: {old}")
-        if new in accounts:
+        if new in provider_accounts:
             raise RegistryError(f"account already exists: {new}")
-        accounts[new] = accounts.pop(old)
-        if data.get("active") == old:
-            data["active"] = new
+        provider_accounts[new] = provider_accounts.pop(old)
+        active = data["active"]
+        assert isinstance(active, dict)
+        if active.get(provider_id) == old:
+            active[provider_id] = new
         self._save(data)
 
-    def set_active(self, name: str | None) -> None:
+    def set_active(self, name: str | None, provider_id: str = "openai") -> None:
         data = self._load()
         accounts = data["accounts"]
         assert isinstance(accounts, dict)
-        if name is not None and name not in accounts:
+        provider_accounts = accounts.get(provider_id)
+        if name is not None and (not isinstance(provider_accounts, dict) or name not in provider_accounts):
             raise RegistryError(f"no such account: {name}")
-        data["active"] = name
+        active = data["active"]
+        assert isinstance(active, dict)
+        if name is None:
+            active.pop(provider_id, None)
+        else:
+            active[provider_id] = name
         self._save(data)

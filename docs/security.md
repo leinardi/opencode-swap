@@ -96,7 +96,8 @@ a strong, unique passphrase; archive security depends on its entropy.
 
 | Data | Location | Sensitive? |
 | --- | --- | --- |
-| Account name, provider, type, account id, email, added timestamp | `registry.json` (`0600`) | No — never a token |
+| Provider-scoped account name, type, account id, email, added timestamp, active hint | `registry.json` (`0600`) | No — never a token |
+| Original registry before automatic v1-to-v2 migration | `registry.v1.json.bak` (`0600`) | No — never a token |
 | Access token, refresh token, API key | OS keychain/keyring, or `secrets/*.enc` fallback (`0600`) | Yes |
 | Pre-switch/pristine/unclaimed `auth.json` snapshots | `backups/*.json` (`0600`, dir `0700`) | Yes — full credential records |
 | Explicit portable account export | User-selected path (`0600`, AES-256 encrypted) | Yes — delete after import |
@@ -104,10 +105,12 @@ a strong, unique passphrase; archive security depends on its entropy.
 
 The non-secret/secret split is enforced structurally: `AccountMeta` (the
 registry dataclass) has no field that could hold a token, and the one place
-identity derivation *could* fall back to a raw refresh token
-(`Provider.identity`, when no `accountId` claim is available) is never
+identity derivation *could* use a credential value (`Provider.identity`) is never
 persisted to the registry — only recomputed on demand from data already
 loaded from the secret store. See `docs/architecture.md#the-provider-seam`.
+Provider implementations enumerate credential fields for archive metadata
+filtering. Unstable OAuth identities trigger preservation and refusal instead
+of guessing ownership.
 
 ## Process hygiene
 

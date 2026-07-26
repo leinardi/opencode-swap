@@ -7,7 +7,7 @@ make python-test
 
 The equivalent direct command is `uv run pytest -q`.
 
-280 tests, runs in ~3 seconds. No network access, no real OS
+Automated suite runs in a few seconds. No network access, no real OS
 keychain/keyring access, and no access to your real
 `~/.local/share/opencode/auth.json` is required or performed by the suite.
 
@@ -35,8 +35,8 @@ patterns, that's a bug in the test, not a reason to add a new pattern.
 
 **Unit** — path resolution (`XDG_DATA_HOME`, `OPENCODE_TEST_HOME`
 awareness), JWT claim decoding and its fallback chains, provider
-extract/splice/identity/describe/validate for all three OpenAI record types
-(oauth/api/wellknown) and their malformed variants, atomic write primitives
+extract/splice/identity/describe/validate for OpenAI and supported provider
+types, generic API metadata validation, guarded OAuth identity behavior, atomic write primitives
 (including permission bits and no-leftover-temp-file assertions), the
 account-name normalization rules, `FileLock` acquire/release/timeout,
 `SecretStore` backend routing (including file-wins-on-read and
@@ -48,7 +48,9 @@ each step, byte-for-byte against what's in the secret store. A dedicated
 rotation test simulates OpenCode refreshing a token while an account is
 live, then asserts the next switch-away captures the rotated (not stale)
 refresh token, and a later reactivation of that account carries the
-captured version — this is the test for the R1 risk described in
+captured version. Multi-provider tests verify duplicate names across providers,
+independent active hints, unrelated-provider preservation, whole-file restore
+reconciliation, and registry v1 migration. This is the test for the R1 risk described in
 `docs/architecture.md`.
 
 **Failure injection** — for `use_account`, a failure is injected at each of:
@@ -87,7 +89,7 @@ secret-passing-via-stdin behavior is exercised through mocked
 
 ## Live verification (not part of the automated suite)
 
-Several milestones were additionally verified against a real OpenCode
+OpenAI milestones were additionally verified against a real OpenCode
 installation and real account during development — a real self-switch
 (`use_account` on the already-active account, provably a no-op), a real
 `add_account` against a live OAuth token, and a real synthetic-account swap
@@ -96,6 +98,10 @@ that triggered an actual OpenCode request and observed it use the swapped
 install and, for the multi-account case, two real ChatGPT accounts) but are
 what caught both permission bugs described below — worth repeating manually
 after any change to `switcher.py`, `store.py`, or `atomic.py`.
+
+OpenAI remains the only end-to-end live-tested provider. Non-OpenAI provider
+coverage is source-derived and synthetic because maintainer lacks those
+accounts. Live testers are explicitly wanted; see `docs/provider-support.md`.
 
 Two real bugs were found this way, not by the automated suite alone, and
 both are now covered by regression tests: the `opencode-swap` data

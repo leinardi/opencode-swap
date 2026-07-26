@@ -7,7 +7,7 @@ implementation plan.
 | --- | --- | --- |
 | M0 — Technical spike | Done | Proved the core premise against a real OpenCode install: swapping `auth.json`'s `"openai"` key is picked up on the next request with no restart. |
 | M1 — Project skeleton | Done | `pyproject.toml`, entrypoints, `paths.py`, `models.py`. |
-| M2 — OpenCode auth discovery | Done | `opencode_auth.py`, `providers/openai.py`, `oauth_jwt.py`; verified against a real `auth.json`. |
+| M2 — OpenCode auth discovery | Done | Common schema plus provider-specific auth behavior; OpenAI verified against real `auth.json`. |
 | M3 — Secure account storage | Done | `store.py` (keychain/keyring/file routing, sticky fallback), `macos_keychain.py`, `locking.py`; verified against a real Linux Secret Service keyring. |
 | M4 — OpenAI account import | Done | `Switcher.add_account` — identity dedup, refresh-in-place on re-add. |
 | M5 — Safe account switching | Done | `Switcher.use_account` — sync-back, transaction/rollback, full failure-injection test matrix. |
@@ -16,10 +16,11 @@ implementation plan.
 | M8 — Testing | Done | Unit, integration, failure-injection, real multi-thread concurrency, compatibility, and security test categories all covered — see `docs/testing.md`. |
 | M9 — Packaging/release | **Postponed** | Not published to PyPI. Runs from a local checkout via `uv`. |
 | M10 — Portable transfer | Done | Password-encrypted all-account export/import with strict conflict preflight and no live `auth.json` changes. |
+| M11 — Multi-provider accounts | Done | Provider-scoped registry/CLI, registry v1 migration, generic API providers, selected safe OAuth handlers. |
 
 ## Current state
 
-280 automated tests, plus several rounds of live verification against a
+Automated tests plus several rounds of live verification against a
 real OpenCode installation and real OpenAI account (see
 `docs/testing.md#live-verification`). Two real permission bugs were found
 and fixed during that live verification (data directory and backups
@@ -39,9 +40,12 @@ directory not locked down to `0700`) — both are now regression-tested.
 - **No Windows support.** Out of scope for v1; `locking.py` is POSIX-only
   (`fcntl`), and the storage backend comparison in `docs/security.md` was
   only evaluated for Linux/macOS.
-- **No providers besides OpenAI.** The `Provider` seam
-  (`docs/architecture.md#the-provider-seam`) exists specifically so this is
-  additive later, but no second provider has been built or planned yet.
+- **Non-OpenAI live verification wanted.** OpenAI is only provider tested end
+  to end with real accounts. Generic API, Copilot, Poe, and guarded xAI support
+  is source-derived and synthetic; see `docs/provider-support.md`.
+- **GitLab/Snowflake OAuth deferred.** Stored records do not expose a provably
+  stable per-user identity, so token-rotation ownership cannot be established
+  without guessing.
 - **`process_detection.py` is best-effort.** It shells out to `pgrep -x
   opencode`; if `pgrep` is unavailable it silently reports "not running"
   rather than failing the command. This is advisory, not a safety

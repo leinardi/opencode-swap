@@ -17,6 +17,7 @@ from opencode_swap.exceptions import RegistryError
 _NAME_RE = re.compile(r"^[a-z0-9_.@+-]+$")
 
 type JsonObject = dict[str, object]
+type AccountKey = tuple[str, str]
 
 
 def normalize_account_name(name: str) -> str:
@@ -31,6 +32,15 @@ def normalize_account_name(name: str) -> str:
     if not _NAME_RE.match(normalized):
         raise ValueError(f"account name '{name}' may only contain letters, digits, '-', '_', '.', '@', and '+'")
     return normalized
+
+
+def normalize_provider_id(provider_id: str) -> str:
+    """Validate an exact OpenCode auth.json provider key."""
+    if not provider_id or provider_id != provider_id.strip():
+        raise ValueError("provider id cannot be empty or have surrounding whitespace")
+    if any(ord(char) < 32 or ord(char) == 127 for char in provider_id):
+        raise ValueError("provider id contains control characters")
+    return provider_id
 
 
 class Validity(Enum):

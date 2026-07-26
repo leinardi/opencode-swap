@@ -18,7 +18,7 @@ from pathlib import Path
 from opencode_swap import __version__, backup, opencode_auth, paths, process_detection
 from opencode_swap.exceptions import AuthFileError, OpenCodeSwapError, SchemaError
 from opencode_swap.models import ImportConflictAction, Validity
-from opencode_swap.providers import PROVIDERS
+from opencode_swap.providers import get_provider
 from opencode_swap.switcher import Switcher
 from opencode_swap.usage import UsageSnapshot
 
@@ -32,29 +32,36 @@ def _build_parser() -> argparse.ArgumentParser:
 
     subparsers = parser.add_subparsers(dest="command")
 
-    add_p = subparsers.add_parser("add", help="import the active OpenAI account into secure storage")
+    add_p = subparsers.add_parser("add", help="import a provider's active account into secure storage")
+    add_p.add_argument("provider", help="OpenCode provider id")
     add_p.add_argument("name", help="name to save the account under")
 
     list_p = subparsers.add_parser("list", help="list saved accounts")
+    list_p.add_argument("provider", nargs="?", help="optional provider id filter")
     list_p.add_argument(
         "--usage",
         action="store_true",
-        help="fetch and show live OpenAI/ChatGPT usage for each account (network calls; off by default)",
+        help="fetch OpenAI/ChatGPT usage where supported (network calls; off by default)",
     )
-    subparsers.add_parser("current", help="show which managed account is active")
+    current_p = subparsers.add_parser("current", help="show which managed accounts are active")
+    current_p.add_argument("provider", nargs="?", help="optional provider id filter")
 
-    use_p = subparsers.add_parser("use", help="switch the active OpenAI account")
+    use_p = subparsers.add_parser("use", help="switch a provider's active account")
+    use_p.add_argument("provider", help="OpenCode provider id")
     use_p.add_argument("name", help="saved account name to activate")
     use_p.add_argument("-y", "--yes", action="store_true", help="don't prompt for confirmation")
 
-    switch_p = subparsers.add_parser("switch", help="switch to the next saved OpenAI account")
+    switch_p = subparsers.add_parser("switch", help="switch to the next saved account for a provider")
+    switch_p.add_argument("provider", help="OpenCode provider id")
     switch_p.add_argument("-y", "--yes", action="store_true", help="don't prompt for confirmation")
 
     remove_p = subparsers.add_parser("remove", help="remove a saved account")
+    remove_p.add_argument("provider", help="OpenCode provider id")
     remove_p.add_argument("name", help="saved account name to remove")
     remove_p.add_argument("-y", "--yes", action="store_true", help="don't prompt for confirmation")
 
     rename_p = subparsers.add_parser("rename", help="rename a saved account")
+    rename_p.add_argument("provider", help="OpenCode provider id")
     rename_p.add_argument("old", help="current account name")
     rename_p.add_argument("new", help="new account name")
 
@@ -127,26 +134,27 @@ def _prompt_archive_extension(path: Path) -> Path:
 
 
 def cmd_add(switcher: Switcher, args: argparse.Namespace) -> int:
-    meta = switcher.add_account(args.name)
-    print(f"Added '{meta.name}' ({meta.email or 'no email'}, account {_redact_account_id(meta.account_id)}).")
+    meta = switcher.add_account(args.name, provider_id=args.provider)
+    print(f"Added '{meta.provider}:{meta.name}' ({meta.email or 'no email'}, account {_redact_account_id(meta.account_id)}).")
     return 0
 
 
 def cmd_list(switcher: Switcher, args: argparse.Namespace) -> int:
-    accounts = switcher.registry.accounts()
+    accounts = switcher.registry.scoped_accounts(args.provider)
     if not accounts:
-        print("No accounts saved. Run `opencode-swap add <name>` after logging into OpenCode.")
+        print("No accounts saved. Run `opencode-swap add <provider> <name>` after logging into OpenCode.")
         return 0
 
-    active, _ = switcher.current()
+    active_by_provider = {provider_id: switcher.current(provider_id)[0] for provider_id in {meta.provider for meta in accounts.values()}}
     validity_tag = {Validity.OK: "", Validity.EXPIRED: " (expired)", Validity.INVALID: " (invalid!)"}
-    for name in sorted(accounts):
-        meta = accounts[name]
+    for provider_id, name in sorted(accounts):
+        meta = accounts[(provider_id, name)]
+        active = active_by_provider[provider_id]
         marker = "*" if active is not None and name == active.name else " "
-        validity = switcher.account_validity(name)
-        line = f"{marker} {name:<20} {_redact_account_id(meta.account_id):<8} {meta.email or '-':<28}{validity_tag[validity]}"
+        validity = switcher.account_validity(name, provider_id=provider_id)
+        line = f"{marker} {provider_id:<22} {name:<20} {_redact_account_id(meta.account_id):<8} {meta.email or '-':<28}{validity_tag[validity]}"
         if args.usage:
-            line += _format_usage(switcher.fetch_usage(name))
+            line += _format_usage(switcher.fetch_usage(name, provider_id=provider_id))
         print(line)
     return 0
 
@@ -185,18 +193,33 @@ def _format_usage(snapshot: UsageSnapshot | None) -> str:
 
 
 def cmd_current(switcher: Switcher, args: argparse.Namespace) -> int:
-    meta, desc = switcher.current()
-    if desc is None:
-        print("No active OpenAI account in OpenCode.")
+    provider_ids = [args.provider] if args.provider else sorted({meta.provider for meta in switcher.registry.scoped_accounts().values()})
+    if not args.provider and switcher.opencode_auth_path.exists():
+        try:
+            live_provider_ids = set(opencode_auth.read_auth(switcher.opencode_auth_path))
+        except AuthFileError:
+            live_provider_ids = set()
+        provider_ids = sorted(set(provider_ids) | live_provider_ids)
+    if not provider_ids:
+        print("No active provider accounts in OpenCode.")
         return 0
-    if meta is None:
-        print(
-            f"OpenCode is logged into an account opencode-swap doesn't manage "
-            f"(account {_redact_account_id(desc.account_id)}). Run `opencode-swap add <name>` to manage it."
-        )
-        return 0
-    print(f"{meta.name} ({meta.email or 'no email'}, account {_redact_account_id(meta.account_id)})")
-    return 0
+    incompatible = False
+    for provider_id in provider_ids:
+        try:
+            meta, desc = switcher.current(provider_id)
+        except SchemaError as exc:
+            if args.provider:
+                raise
+            print(f"{provider_id}: unsupported/incompatible ({exc})")
+            incompatible = True
+            continue
+        if desc is None:
+            print(f"{provider_id}: no active account")
+        elif meta is None:
+            print(f"{provider_id}: active account opencode-swap doesn't manage ({_redact_account_id(desc.account_id)})")
+        else:
+            print(f"{provider_id}: {meta.name} ({meta.email or 'no email'}, account {_redact_account_id(meta.account_id)})")
+    return 1 if incompatible else 0
 
 
 def _can_switch(assume_yes: bool) -> bool:
@@ -212,31 +235,32 @@ def _can_switch(assume_yes: bool) -> bool:
 def cmd_use(switcher: Switcher, args: argparse.Namespace) -> int:
     if not _can_switch(args.yes):
         return 1
-    meta = switcher.use_account(args.name)
-    print(f"Switched to '{meta.name}'.")
+    meta = switcher.use_account(args.name, provider_id=args.provider)
+    print(f"Switched to '{meta.provider}:{meta.name}'.")
     return 0
 
 
 def cmd_switch(switcher: Switcher, args: argparse.Namespace) -> int:
     if not _can_switch(args.yes):
         return 1
-    meta = switcher.use_account(switcher.next_account().name)
-    print(f"Switched to '{meta.name}'.")
+    next_meta = switcher.next_account(args.provider)
+    meta = switcher.use_account(next_meta.name, provider_id=args.provider)
+    print(f"Switched to '{meta.provider}:{meta.name}'.")
     return 0
 
 
 def cmd_remove(switcher: Switcher, args: argparse.Namespace) -> int:
-    if not _confirm(f"Remove saved account '{args.name}'?", args.yes):
+    if not _confirm(f"Remove saved account '{args.provider}:{args.name}'?", args.yes):
         print("Aborted.", file=sys.stderr)
         return 1
-    switcher.remove_account(args.name)
-    print(f"Removed '{args.name}'.")
+    switcher.remove_account(args.name, provider_id=args.provider)
+    print(f"Removed '{args.provider}:{args.name}'.")
     return 0
 
 
 def cmd_rename(switcher: Switcher, args: argparse.Namespace) -> int:
-    switcher.rename_account(args.old, args.new)
-    print(f"Renamed '{args.old}' to '{args.new}'.")
+    switcher.rename_account(args.old, args.new, provider_id=args.provider)
+    print(f"Renamed '{args.provider}:{args.old}' to '{args.provider}:{args.new}'.")
     return 0
 
 
@@ -283,7 +307,7 @@ def cmd_import(switcher: Switcher, args: argparse.Namespace) -> int:
             print("Enter s, sa, o, oa, or a (full names also accepted).", file=sys.stderr)
 
     count = switcher.import_accounts(path, _prompt_archive_password(confirm=False), resolve_conflict)
-    print(f"Imported {count} account{'s' if count != 1 else ''}. Run `opencode-swap use <name>` to activate one.")
+    print(f"Imported {count} account{'s' if count != 1 else ''}. Run `opencode-swap use <provider> <name>` to activate one.")
     return 0
 
 
@@ -297,11 +321,12 @@ def cmd_restore(switcher: Switcher, args: argparse.Namespace) -> int:
         print("Aborted.", file=sys.stderr)
         return 1
 
-    meta = switcher.restore(source=source)
-    if meta is not None:
-        print(f"Restored. OpenCode is now on managed account '{meta.name}'.")
+    metas = switcher.restore(source=source)
+    if metas:
+        accounts = ", ".join(f"{meta.provider}:{meta.name}" for meta in sorted(metas, key=lambda item: (item.provider, item.name)))
+        print(f"Restored. Active managed accounts: {accounts}.")
     else:
-        print("Restored. The restored account isn't one opencode-swap manages (or couldn't be identified).")
+        print("Restored. No restored provider account could be matched to a managed account.")
     return 0
 
 
@@ -311,22 +336,33 @@ def cmd_doctor(switcher: Switcher, args: argparse.Namespace) -> int:
     if paths.opencode_auth_content_override_active():
         print("  WARNING: OPENCODE_AUTH_CONTENT is set — OpenCode ignores auth.json entirely while this is set, so switches would have no effect.")
 
+    provider_statuses: list[str] = []
     try:
         if switcher.opencode_auth_path.exists():
             auth = opencode_auth.read_auth(switcher.opencode_auth_path)
-            PROVIDERS["openai"].extract(auth)
+            managed_provider_ids = {meta.provider for meta in switcher.registry.scoped_accounts().values()}
+            for provider_id in sorted(set(auth) | managed_provider_ids):
+                try:
+                    get_provider(provider_id).extract(auth)
+                except (SchemaError, ValueError) as exc:
+                    provider_statuses.append(f"  provider {provider_id!r}: UNSUPPORTED/INCOMPATIBLE: {exc}")
         schema_status = "OK"
     except AuthFileError as exc:
         schema_status = f"UNREADABLE: {exc}"
     except SchemaError as exc:
         schema_status = f"INCOMPATIBLE: {exc}"
     print(f"  schema check: {schema_status}")
+    for status in provider_statuses:
+        print(status)
 
     print(f"opencode-swap data dir: {switcher.data_root}")
     print(f"  secret backend: {switcher.secrets.backend_name}")
-    accounts = switcher.registry.accounts()
+    accounts = switcher.registry.scoped_accounts()
     print(f"  managed accounts: {len(accounts)}")
-    print(f"  active (per registry): {switcher.registry.get_active() or 'none'}")
+    active = [
+        f"{provider}:{name}" for provider in sorted({meta.provider for meta in accounts.values()}) if (name := switcher.registry.get_active(provider))
+    ]
+    print(f"  active (per registry): {', '.join(active) if active else 'none'}")
     print(f"  .bak present: {'yes' if backup.read_bak(switcher.data_root) is not None else 'no'}")
     print(f"  .pristine present: {'yes' if backup.read_pristine(switcher.data_root) is not None else 'no'}")
 
@@ -361,8 +397,8 @@ def main(argv: list[str] | None = None) -> int:
     if handler is None:
         parser.error(f"unknown command: {args.command}")
 
-    switcher = Switcher.default()
     try:
+        switcher = Switcher.default()
         return handler(switcher, args)
     except (OpenCodeSwapError, ValueError) as exc:
         print(f"opencode-swap: {exc}", file=sys.stderr)

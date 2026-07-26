@@ -18,10 +18,6 @@ from opencode_swap.models import AccountDesc, AuthRecord, JsonObject, Validity
 class Provider(Protocol):
     id: str
 
-    def keys(self) -> list[str]:
-        """Keys this provider owns in auth.json (usually just [self.id])."""
-        ...
-
     def extract(self, auth: JsonObject) -> AuthRecord | None:
         """Pull this provider's entry out of a parsed auth.json.
 
@@ -41,6 +37,14 @@ class Provider(Protocol):
         """A stable string identifying which real-world account this record
         belongs to, independent of token rotation (e.g. account id, or the
         refresh token itself as a fallback)."""
+        ...
+
+    def identity_is_stable(self, record: AuthRecord) -> bool:
+        """Whether identity remains unchanged when OpenCode refreshes it."""
+        ...
+
+    def credential_values(self, record: AuthRecord) -> set[str]:
+        """Secret strings which must never enter metadata or output."""
         ...
 
     def describe(self, record: AuthRecord) -> AccountDesc:

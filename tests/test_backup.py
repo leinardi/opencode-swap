@@ -38,7 +38,8 @@ def test_read_pristine_none_when_absent(tmp_path):
 def test_write_unclaimed_returns_path_and_content(tmp_path):
     path = backup.write_unclaimed(tmp_path, "openai", {"type": "oauth", "accountId": "acct-x"})
     assert path.exists()
-    assert path.name.startswith("unclaimed-openai-")
+    assert path.name.startswith("unclaimed-")
+    assert "openai" not in path.name
 
 
 def test_unclaimed_backups_do_not_collide_within_second(tmp_path, monkeypatch):

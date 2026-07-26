@@ -20,7 +20,7 @@ from opencode_swap.exceptions import RegistryError, TransferError
 from opencode_swap.models import AccountMeta, JsonObject
 
 FORMAT_NAME = "opencode-swap-accounts"
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2
 MEMBER_NAME = "accounts.json"
 MAX_ARCHIVE_BYTES = 10 * 1024 * 1024
 MAX_MANIFEST_BYTES = 10 * 1024 * 1024
@@ -87,14 +87,14 @@ def _decode_manifest(payload: bytes) -> list[TransferEntry]:
         raise TransferError("account archive manifest is not valid JSON") from exc
     if not isinstance(data, dict) or set(data) != {"format", "version", "accounts"}:
         raise TransferError("account archive has an unsupported structure")
-    if data["format"] != FORMAT_NAME or type(data["version"]) is not int or data["version"] != FORMAT_VERSION:
+    if data["format"] != FORMAT_NAME or type(data["version"]) is not int or data["version"] not in (1, FORMAT_VERSION):
         raise TransferError("account archive has an unsupported format version")
     accounts = data["accounts"]
     if not isinstance(accounts, list) or len(accounts) > MAX_ACCOUNTS:
         raise TransferError("account archive has an invalid account list")
 
     entries: list[TransferEntry] = []
-    names: set[str] = set()
+    names: set[tuple[str, str]] = set()
     for item in accounts:
         if not isinstance(item, dict) or set(item) != {"name", "meta", "record"}:
             raise TransferError("account archive contains an invalid account entry")
@@ -106,9 +106,12 @@ def _decode_manifest(payload: bytes) -> list[TransferEntry]:
             meta = AccountMeta.from_dict(name, item["meta"])
         except RegistryError as exc:
             raise TransferError("account archive contains invalid account metadata") from exc
-        if name in names:
+        account_key = (meta.provider, name)
+        if account_key in names:
             raise TransferError("account archive contains duplicate account names")
-        names.add(name)
+        if data["version"] == 1 and any(existing_name == name for _provider, existing_name in names):
+            raise TransferError("version 1 account archive contains duplicate account names")
+        names.add(account_key)
         entries.append(TransferEntry(meta=meta, record=cast(JsonObject, record)))
     return entries
 

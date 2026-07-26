@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import secrets
 import time
@@ -95,8 +96,9 @@ def write_unclaimed(data_root: Path, provider_id: str, record: JsonObject) -> Pa
     directory = _backups_dir(data_root)
     # Random suffixes make collisions improbable; exclusive publication makes
     # even a repeated suffix unable to replace another foreign credential.
+    provider_tag = hashlib.sha256(provider_id.encode("utf-8")).hexdigest()[:12]
     for _ in range(100):
-        path = directory / f"unclaimed-{provider_id}-{timestamp}-{secrets.token_hex(8)}.json"
+        path = directory / f"unclaimed-{provider_tag}-{timestamp}-{secrets.token_hex(8)}.json"
         try:
             atomic_write_json_exclusive(path, record)
         except FileExistsError:

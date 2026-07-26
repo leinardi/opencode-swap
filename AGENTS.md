@@ -4,8 +4,8 @@ Guide for AI agents in this repo. Read before change anything.
 
 ## What this is
 
-`opencode-swap` = standalone Python CLI. Switches OpenCode between multi saved
-OpenAI accounts — securely store each account's OpenCode credential record,
+`opencode-swap` = standalone Python CLI. Switches OpenCode between saved
+provider accounts — securely store each account's OpenCode credential record,
 atomic-swap into `~/.local/share/opencode/auth.json` — single file OpenCode
 reads fresh every request. NOT OpenCode plugin. NOT runtime proxy/interceptor
 (that's `opencode-balancer` project). Full rationale: `README.md` +
@@ -45,12 +45,12 @@ Read these two first — most "obvious" changes wrong without context:
   Watch same bug class: catching specific exception's *base class* where
   should only catch specific case.
 - **Never lose live credential without preserving first.** Before
-  `use_account` overwrites live `openai` entry, either syncs managed
+  `use_account` overwrites live provider entry, either syncs managed
   account's rotated tokens back into storage, or stashes
   unmanaged/foreign login under `backups/unclaimed-*.json`. Don't add code
   path overwriting `auth.json` skipping this.
 - **Secrets never touch non-secret registry.** `registry.json` holds only
-  name/provider/type/account id/email/timestamp. Access tokens, refresh
+  name/provider/type/account id/email/timestamp/active hints. Access tokens, refresh
   tokens, API keys only through `SecretStore` (keychain/keyring/file). About
   to put token-shaped string into `registry.py` or `models.AccountMeta`?
   Stop.
@@ -105,10 +105,9 @@ Read these two first — most "obvious" changes wrong without context:
   behavior or specific incident (bug found during manual verification,
   claude-swap precedent) justifying non-obvious choice. Can't cite reason →
   comment probably shouldn't exist.
-- Don't add abstraction for hypothetical second provider "in case needed
-  later" — `Provider` protocol (`providers/base.py`) deliberately smallest
-  seam making provider #2 addable w/o touching `switcher.py`. Keep that
-  way; don't grow speculatively.
+- Keep `Provider` protocol (`providers/base.py`) limited to behavior required
+  by implemented providers. Static API providers use generic handling; OAuth
+  requires provider-specific evidence for identity, refresh, and expiry.
 - See `docs/architecture.md` for module responsibility map before adding
   new file — most new code belongs in existing module.
 

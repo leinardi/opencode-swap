@@ -69,8 +69,8 @@ def test_restore_bak_restores_content_and_identifies_owner(switcher):
     switcher.use_account("a")
     switcher.use_account("b")  # .bak now holds a's state (pre-switch-to-b)
 
-    meta = switcher.restore(source="bak")
-    assert meta.name == "a"
+    metas = switcher.restore(source="bak")
+    assert [meta.name for meta in metas] == ["a"]
     assert live_openai(switcher.opencode_auth_path)["accountId"] == "acct-a"
     assert switcher.registry.get_active() == "a"
 
@@ -80,9 +80,9 @@ def test_restore_pristine_restores_content(switcher):
     switcher.use_account("a")  # pristine snapshot taken here, holds whatever was live (b, from add)
     switcher.use_account("b")
 
-    meta = switcher.restore(source="pristine")
+    metas = switcher.restore(source="pristine")
     assert live_openai(switcher.opencode_auth_path)["accountId"] == "acct-b"
-    assert meta.name == "b"
+    assert [meta.name for meta in metas] == ["b"]
 
 
 def test_restore_chains_current_into_bak(switcher):
@@ -131,9 +131,9 @@ def test_restore_clears_marker_when_live_replacement_already_committed(switcher,
 
     assert live_openai(switcher.opencode_auth_path)["accountId"] == "acct-a"
     monkeypatch.setattr(backup, "remove_restore_snapshot", original_remove)
-    meta = switcher.restore(source="bak")
+    metas = switcher.restore(source="bak")
 
-    assert meta.name == "a"
+    assert [meta.name for meta in metas] == ["a"]
     assert not (switcher.data_root / "backups" / backup.RESTORE_SNAPSHOT_FILENAME).exists()
     assert live_openai(switcher.opencode_auth_path)["accountId"] == "acct-a"
 
@@ -180,9 +180,9 @@ def test_restore_recovers_corrupted_live_file(switcher):
     switcher.use_account("b")  # .bak now holds a
 
     switcher.opencode_auth_path.write_text("{not valid json")
-    meta = switcher.restore(source="bak")
+    metas = switcher.restore(source="bak")
 
-    assert meta.name == "a"
+    assert [meta.name for meta in metas] == ["a"]
     assert live_openai(switcher.opencode_auth_path)["accountId"] == "acct-a"
 
 
@@ -192,8 +192,8 @@ def test_restore_unidentifiable_record_still_succeeds(switcher):
     _setup_two_accounts(switcher)
     backup.write_bak(switcher.data_root, {"openai": {"type": "oauth"}})  # missing required fields
 
-    meta = switcher.restore(source="bak")
-    assert meta is None  # couldn't identify, but didn't raise
+    metas = switcher.restore(source="bak")
+    assert metas == []  # couldn't identify, but didn't raise
     assert live_openai(switcher.opencode_auth_path) == {"type": "oauth"}
 
 
@@ -206,7 +206,7 @@ def test_restore_ignores_malformed_unrelated_stored_credential(switcher):
     data = {"openai": oauth_entry(account_id="acct-a")}
     backup.write_bak(switcher.data_root, data)
 
-    assert switcher.restore(source="bak") is None
+    assert switcher.restore(source="bak") == []
     assert json.loads(switcher.opencode_auth_path.read_text()) == data
 
 

@@ -52,7 +52,7 @@ def test_add_account_imports_and_marks_active(switcher):
 
 def test_add_account_no_live_entry_raises(switcher):
     write_auth(switcher.opencode_auth_path, None, extra={"anthropic": {"type": "api", "key": "x"}})
-    with pytest.raises(OpenCodeSwapError, match="no active OpenAI account"):
+    with pytest.raises(OpenCodeSwapError, match="no active openai account"):
         switcher.add_account("work")
 
 
@@ -297,8 +297,9 @@ def test_use_rejects_unregistered_registry_provider_at_orchestration_boundary(sw
         AccountMeta(name="future", provider="future", type="oauth", account_id=None, email=None, added="2026-01-01T00:00:00Z")
     )
 
-    with pytest.raises(OpenCodeSwapError, match="unsupported provider"):
-        switcher.use_account("future")
+    switcher.secrets.put("future:future", json.dumps(oauth_entry(account_id="acct-future")))
+    with pytest.raises(OpenCodeSwapError, match="auth type is not supported"):
+        switcher.use_account("future", provider_id="future")
 
 
 def test_unsupported_provider_error_never_includes_registry_value(switcher):
@@ -308,7 +309,7 @@ def test_unsupported_provider_error_never_includes_registry_value(switcher):
     )
 
     with pytest.raises(OpenCodeSwapError) as exc_info:
-        switcher.use_account("future")
+        switcher.use_account("future", provider_id=secret)
 
     assert secret not in str(exc_info.value)
 

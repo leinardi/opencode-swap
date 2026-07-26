@@ -183,7 +183,7 @@ def test_use_aborts_ambiguous_no_id_live_credential(switcher):
 
     assert json.loads(switcher.secrets.get("openai:a"))["refresh"] == "ra"
     assert live_openai(switcher.opencode_auth_path)["refresh"] == "ra-rotated"
-    unclaimed = list((switcher.data_root / "backups").glob("unclaimed-openai-*.json"))
+    unclaimed = list((switcher.data_root / "backups").glob("unclaimed-*.json"))
     assert len(unclaimed) == 1
     assert json.loads(unclaimed[0].read_text())["refresh"] == "ra-rotated"
 
@@ -196,7 +196,7 @@ def test_use_unclaimed_foreign_login_is_stashed(switcher):
 
     switcher.use_account("a")
 
-    unclaimed = list((switcher.data_root / "backups").glob("unclaimed-openai-*.json"))
+    unclaimed = list((switcher.data_root / "backups").glob("unclaimed-*.json"))
     assert len(unclaimed) == 1
     assert json.loads(unclaimed[0].read_text())["accountId"] == "acct-unknown"
     assert live_openai(switcher.opencode_auth_path)["accountId"] == "acct-a"

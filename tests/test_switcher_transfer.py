@@ -286,7 +286,7 @@ def test_import_rejects_invalid_added_timestamp_before_writes(tmp_path):
 def test_export_normalizes_legacy_missing_added_timestamp(source, tmp_path):
     registry_path = source.data_root / "registry.json"
     registry = json.loads(registry_path.read_text())
-    del registry["accounts"]["work"]["added"]
+    del registry["accounts"]["openai"]["work"]["added"]
     registry_path.write_text(json.dumps(registry))
     archive = tmp_path / "accounts.ocs"
     source.export_accounts(archive, "password")
