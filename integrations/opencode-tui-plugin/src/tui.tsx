@@ -9,8 +9,9 @@ type Account = {
 }
 
 type Active = {
-  state: "managed" | "unmanaged" | "none"
+  state: "managed" | "unmanaged" | "none" | "incompatible"
   name?: string
+  reason?: string
 }
 
 type Usage = {
@@ -44,6 +45,23 @@ const COMMAND_TIMEOUT_MS = 10_000
 function command(options: Record<string, unknown> | undefined): string {
   const value = options?.command
   return typeof value === "string" && value.trim() ? value : "opencode-swap"
+}
+
+// Usage lookups send the account's live OAuth access token to chatgpt.com
+// (see README "Network access"). On by default; set `{ "usage": false }` to
+// disable the extra request and its egress entirely. Any JS-falsy value (0,
+// "", null), and the strings "false"/"no"/"off"/"0" (any case, untrimmed
+// whitespace tolerated), are also treated as disabled -- OpenCode plugin
+// options come from user-edited JSON/JSONC, and only recognizing the exact
+// boolean `false` would silently keep the egress on for a plausible typo.
+function usageEnabled(options: Record<string, unknown> | undefined): boolean {
+  const value = options?.usage
+  if (value === undefined) return true
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase()
+    return !["", "false", "no", "off", "0"].includes(normalized)
+  }
+  return Boolean(value)
 }
 
 async function run(options: Record<string, unknown> | undefined, args: string[]) {
@@ -101,7 +119,7 @@ async function currentStatus(options: Record<string, unknown> | undefined, provi
   const summary = await readStatus(options)
   const provider = summary.providers.find((item) => item.id === providerID)
   if (!provider || provider.accounts.length === 0) return
-  if (provider.active.state !== "managed") return provider
+  if (provider.active.state !== "managed" || !usageEnabled(options)) return provider
 
   const detailed = (await readStatus(options, providerID, true)).providers.find((item) => item.id === providerID)
   return detailed ?? provider
@@ -110,7 +128,11 @@ async function currentStatus(options: Record<string, unknown> | undefined, provi
 function text(provider: ProviderStatus) {
   if (provider.active.state === "unmanaged") return "unmanaged account"
   if (provider.active.state === "none") return "no active account"
-  return provider.active.name
+  if (provider.active.state === "incompatible") return "incompatible account"
+  // Defends against a future CLI adding a new `active.state` value under the
+  // same schema_version=1 (see cli.py's compatibility contract): an older
+  // plugin build must degrade to this instead of rendering `undefined`.
+  return provider.active.name ?? "unknown account state"
 }
 
 function usageDetails(provider: ProviderStatus) {

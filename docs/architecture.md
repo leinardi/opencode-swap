@@ -37,7 +37,7 @@ src/opencode_swap/
   providers/*.py       OAuth behavior proven safe for specific providers
   oauth_jwt.py         JWT claim decoding (accountId/email extraction) — no network
   paths.py             resolves OpenCode's auth.json path and opencode-swap's own data dir
-  backup.py            .bak / .pristine / unclaimed-*.json snapshots
+  backup.py            .bak / .pristine / unclaimed-*.json / discarded-restore-*.json snapshots
   transfer.py          versioned password-encrypted account archive format
   locking.py           FileLock (fcntl-based, POSIX only)
   macos_keychain.py    subprocess wrapper around /usr/bin/security
@@ -59,9 +59,12 @@ Responsibility boundaries are deliberate:
   provider-scoped non-secret account metadata and active hints.
 - `switcher.py` is the only module that ties all of the above together into
   actual operations, and the only place that holds the lock.
-- The optional TUI plugin reads only `opencode-swap status --json` and invokes
-  existing CLI operations. It never reads credential storage or `auth.json`,
-  so it cannot bypass the switch transaction.
+- The optional TUI plugin reads only `opencode-swap status --json` (and, by
+  default, `status --json --usage` every 60 seconds for the active managed
+  account, which makes an outbound request carrying that account's OAuth
+  access token — see the plugin README's "Network access" section) and
+  invokes existing CLI operations. It never reads credential storage or
+  `auth.json`, so it cannot bypass the switch transaction.
 
 Static API-key providers use `ApiProvider` without registration. OAuth is
 registered explicitly because the common OpenCode record shape does not imply
@@ -112,6 +115,8 @@ $XDG_DATA_HOME/opencode-swap/            (0700)
     auth.json.pristine                   (0600) — first-ever snapshot, written once
     auth.json.restore                    (0600) — temporary restore source; retained if restore fails
     unclaimed-<provider-hash>-<ts>-<suffix>.json (0600) — foreign login preserved instead of overwritten
+    discarded-restore-<ts>-<suffix>.json (0600) — full auth.json snapshot archived by
+                                          `restore --discard-pending` before dropping a stuck auth.json.restore
   secrets/                               (0700, primary on Linux; macOS fallback)
     v2-<sha256-key>.enc                  (0600) — base64-obfuscated record;
                                           legacy openai_<name>.enc files migrate on write
@@ -161,10 +166,10 @@ use <provider> <target>:
 Everything before the `atomic_write_auth` call is either a read, or a write
 to opencode-swap's *own* storage (secret store, `.bak`) — none of it touches
 OpenCode's live state. The atomic write is the one moment OpenCode's world
-changes, and it's genuinely atomic (temp file in the same directory, then
-`os.replace`), so a crash during that specific call can never leave a
-truncated or partial `auth.json` — it either fully lands or the original
-file is untouched.
+changes, and it's genuinely atomic (temp file in the same directory, fsynced,
+then `os.replace`, then the directory itself fsynced), so neither a crash nor
+a power loss during that specific call can leave a truncated or partial
+`auth.json` — it either fully lands or the original file is untouched.
 
 ### Why sync-back is mandatory
 

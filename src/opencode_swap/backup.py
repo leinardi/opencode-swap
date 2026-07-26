@@ -12,6 +12,10 @@
   didn't belong to any managed account at switch time (an external
   `opencode auth login` opencode-swap wasn't told about). Preserved instead
   of silently overwritten so nothing is lost.
+- ``discarded-restore-<timestamp>-<suffix>.json`` — a `.restore` recovery
+  snapshot archived by ``restore --discard-pending`` before the pending
+  marker is cleared, so the one remaining copy of a previous switch's
+  pre-restore state is never destroyed outright.
 """
 
 from __future__ import annotations
@@ -89,6 +93,23 @@ def read_restore_snapshot(data_root: Path) -> JsonObject | None:
 
 def remove_restore_snapshot(data_root: Path) -> None:
     (_backups_dir(data_root) / RESTORE_SNAPSHOT_FILENAME).unlink(missing_ok=True)
+
+
+def write_discarded_restore(data_root: Path, auth: JsonObject) -> Path:
+    """Archive a `.restore` recovery snapshot before its pending marker is
+    dropped (see switcher.py's `restore(discard_pending=True)`), so
+    discarding it never destroys the only remaining copy of a previous
+    switch's pre-restore state."""
+    timestamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    directory = _backups_dir(data_root)
+    for _ in range(100):
+        path = directory / f"discarded-restore-{timestamp}-{secrets.token_hex(8)}.json"
+        try:
+            atomic_write_json_exclusive(path, auth)
+        except FileExistsError:
+            continue
+        return path
+    raise BackupError("could not allocate a unique discarded-restore backup")
 
 
 def write_unclaimed(data_root: Path, provider_id: str, record: JsonObject) -> Path:

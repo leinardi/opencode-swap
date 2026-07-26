@@ -4,7 +4,7 @@ import time
 
 import pytest
 
-from opencode_swap import cli, process_detection, transfer
+from opencode_swap import backup, cli, process_detection, transfer
 from opencode_swap.exceptions import RegistryError
 from opencode_swap.models import AccountMeta, Platform
 from opencode_swap.usage import UsageSnapshot
@@ -317,6 +317,43 @@ def test_status_usage_does_not_query_unmanaged_active_account(tmp_path, monkeypa
     assert "usage" not in json.loads(capsys.readouterr().out)["providers"][0]
 
 
+def test_status_reports_incompatible_provider_without_failing_the_whole_command(tmp_path, capsys):
+    write_live_account(tmp_path, account_id="acct-1", extra={"anthropic": {"type": "oauth", "refresh": "r", "access": "a", "expires": 0}})
+    assert cli.main(["add", "openai", "work"]) == 0
+    capsys.readouterr()
+
+    assert cli.main(["status", "--json"]) == 0
+    result = json.loads(capsys.readouterr().out)
+
+    by_id = {provider["id"]: provider for provider in result["providers"]}
+    assert by_id["openai"]["active"] == {"state": "managed", "name": "work"}
+    assert by_id["anthropic"]["active"]["state"] == "incompatible"
+    assert "anthropic" in by_id["anthropic"]["active"]["reason"]
+
+    assert cli.main(["status"]) == 0
+    text_output = capsys.readouterr().out
+    assert "openai: work" in text_output
+    assert "anthropic: anthropic auth type is not supported by opencode-swap" in text_output
+
+
+def test_status_distinguishes_corrupt_local_secret_from_unsupported_provider(tmp_path, capsys):
+    """A managed account's own stored secret failing to parse is a local
+    secret-store problem (re-`add` fixes it), not an OpenCode-schema
+    incompatibility -- the reported reason must not conflate the two."""
+    write_live_account(tmp_path, account_id="acct-1")
+    assert cli.main(["add", "openai", "work"]) == 0
+    switcher = cli.Switcher.default()
+    switcher.secrets.put("openai:work", "{")  # corrupt the stored secret
+    capsys.readouterr()
+
+    assert cli.main(["status", "--json"]) == 0
+    result = json.loads(capsys.readouterr().out)
+    active = result["providers"][0]["active"]
+    assert active["state"] == "incompatible"
+    assert "not valid JSON" in active["reason"]
+    assert "not supported by opencode-swap" not in active["reason"]
+
+
 def test_current_explicit_incompatible_provider_fails(tmp_path, capsys):
     path = auth_path(tmp_path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -583,6 +620,7 @@ def test_doctor_runs_clean_with_no_state(capsys):
     assert "secret backend:" in out
     assert ".bak present: no" in out
     assert ".pristine present: no" in out
+    assert ".restore pending: no" in out
 
 
 def test_doctor_reports_backups_present_after_a_switch(tmp_path, capsys):
@@ -630,6 +668,42 @@ def test_restore_bak_with_yes(tmp_path, capsys):
 def test_restore_no_backup_fails_cleanly(capsys):
     assert cli.main(["restore", "--yes"]) == 1
     assert "opencode-swap:" in capsys.readouterr().err
+
+
+def test_doctor_reports_pending_restore_snapshot(tmp_path, capsys):
+    write_live_account(tmp_path, account_id="acct-1")
+    cli.main(["add", "openai", "work"])
+    switcher = cli.Switcher.default()
+    backup.write_restore_snapshot(switcher.data_root, {"openai": {"type": "oauth"}})
+    capsys.readouterr()
+
+    cli.main(["doctor"])
+    out = capsys.readouterr().out
+    assert ".restore pending: yes" in out
+    assert "--discard-pending" in out
+
+
+def test_restore_discard_pending_clears_a_stuck_snapshot(tmp_path, capsys):
+    write_live_account(tmp_path, account_id="acct-1")
+    cli.main(["add", "openai", "work"])
+    write_live_account(tmp_path, account_id="acct-2")
+    cli.main(["add", "openai", "personal"])
+    cli.main(["use", "openai", "work", "--yes"])
+    cli.main(["use", "openai", "personal", "--yes"])
+    switcher = cli.Switcher.default()
+    # Simulate a crash between write_restore_snapshot and the live replace:
+    # a pending snapshot whose content no longer matches live auth.json.
+    backup.write_restore_snapshot(switcher.data_root, {"openai": {"type": "oauth"}})
+    capsys.readouterr()
+
+    # Without --discard-pending, the stuck snapshot still blocks restore.
+    assert cli.main(["restore", "--yes"]) == 1
+    assert "--discard-pending" in capsys.readouterr().err
+
+    assert cli.main(["restore", "--yes", "--discard-pending"]) == 0
+    out = capsys.readouterr().out
+    assert "Restored" in out
+    assert not (switcher.data_root / "backups" / backup.RESTORE_SNAPSHOT_FILENAME).exists()
 
 
 def test_doctor_reports_auth_content_override(tmp_path, monkeypatch, capsys):

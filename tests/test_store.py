@@ -150,6 +150,22 @@ def test_linux_delete_missing_is_noop(tmp_path):
     store.delete("openai:nonexistent")  # must not raise
 
 
+def test_file_delete_wraps_os_error_as_secret_store_error(tmp_path, monkeypatch):
+    """A raw OSError (EACCES/EIO) from the filesystem delete must surface as
+    a typed SecretStoreError, not escape uncaught -- callers that suppress
+    only SecretStoreError/OpenCodeSwapError around a delete-rollback must be
+    able to catch this."""
+    store = SecretStore(tmp_path, platform=Platform.LINUX)
+    store.put("openai:work", "secret-value")
+
+    def boom(self, *args, **kwargs):
+        raise OSError("permission denied")
+
+    monkeypatch.setattr("pathlib.Path.unlink", boom)
+    with pytest.raises(SecretStoreError):
+        store.delete("openai:work")
+
+
 def test_unknown_platform_uses_file_backend_only(tmp_path):
     store = SecretStore(tmp_path, platform=Platform.UNKNOWN)
     assert store.backend_name == "file"

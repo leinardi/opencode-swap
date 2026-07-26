@@ -75,6 +75,36 @@ def test_export_refuses_refresh_to_stable_identity_transition(tmp_path):
     assert json.loads(switcher.secrets.get("openai:work"))["refresh"] == "old-dead-refresh"
 
 
+def test_export_aborts_instead_of_misreading_keychain_outage_as_no_credentials(tmp_path, monkeypatch):
+    """A Keychain outage during export's sync-back must raise, not silently
+    treat every managed account's secret as absent (which would make
+    `_sync_live_for_export` think the live credential is foreign and export
+    a stale copy of the real owner's record)."""
+    stored: dict[tuple[str, str], str] = {}
+    monkeypatch.setattr(macos_keychain, "get_password", lambda service, key: stored.get((service, key)))
+    monkeypatch.setattr(macos_keychain, "set_password", lambda service, key, value: stored.__setitem__((service, key), value))
+
+    switcher = Switcher(tmp_path / "source-auth.json", tmp_path / "source-data", platform=Platform.MACOS)
+    write_auth(switcher.opencode_auth_path, oauth_entry(account_id="acct-a", refresh="refresh-a"))
+    switcher.add_account("work")
+
+    calls = 0
+
+    def flaky_get(service, key):
+        nonlocal calls
+        calls += 1
+        raise macos_keychain.KeychainError("boom")
+
+    monkeypatch.setattr(macos_keychain, "get_password", flaky_get)
+    archive = tmp_path / "accounts.ocs"
+
+    with pytest.raises(OpenCodeSwapError):
+        switcher.export_accounts(archive, "password")
+
+    assert calls > 0
+    assert not archive.exists()
+
+
 def test_name_conflict_fails_before_any_changes(source, tmp_path):
     archive = tmp_path / "accounts.ocs"
     source.export_accounts(archive, "password")

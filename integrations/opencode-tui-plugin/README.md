@@ -34,13 +34,35 @@ Requires Bun 1.3.14. Root `make verify` installs locked dependencies and runs
 typecheck and npm payload check. To run only integration verification, use
 `make tui-plugin-typecheck` or `make tui-plugin-package-check`.
 
-Set a non-default CLI path through a plugin tuple:
+Set a non-default CLI path, or disable usage lookups (see "Network access"
+below), through a plugin tuple. `command` must point directly to the
+`opencode-swap` executable, not the project directory. For a checkout managed
+by `uv`, the executable is normally `.venv/bin/opencode-swap`:
 
 ```json
 {
-  "plugin": [["/absolute/path/to/opencode-swap/integrations/opencode-tui-plugin/src/tui.tsx", { "command": "/absolute/path/to/opencode-swap" }]]
+  "plugin": [
+    [
+      "/absolute/path/to/opencode-swap/integrations/opencode-tui-plugin/src/tui.tsx",
+      { "command": "/absolute/path/to/opencode-swap/.venv/bin/opencode-swap", "usage": false }
+    ]
+  ]
 }
 ```
+
+## Network access
+
+By default, every 60-second refresh runs `opencode-swap status <provider>
+--json --usage` for the session's active provider when it's a managed
+account. That command sends **that account's live OAuth access token** as a
+`Bearer` header to `https://chatgpt.com/backend-api/wham/usage` (see
+`usage.py`), to fetch the usage percentage and reset time shown next to the
+account name.
+
+Set `{ "usage": false }` in the plugin options (see above) to disable this:
+the widget then shows only the account name, and the plugin makes no network
+calls at all — every other refresh continues to use plain `status --json`,
+which is fully local/offline.
 
 ## Behavior
 
@@ -65,4 +87,5 @@ Set a non-default CLI path through a plugin tuple:
   auth-file refresh race.
 
 Plugin invokes `opencode-swap` through argument-array `Bun.spawn`, parses only
-`status --json`, and never reads `auth.json`, registry, or secret storage.
+`status --json` and, unless disabled, `status --json --usage` (see "Network
+access"), and never reads `auth.json`, registry, or secret storage.

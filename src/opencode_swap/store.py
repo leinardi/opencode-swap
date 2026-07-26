@@ -205,11 +205,17 @@ class SecretStore:
             except self._backend_errors as exc:
                 self._pin_file_backend()
                 raise SecretStoreError("could not confirm deletion from the OS credential store") from exc
-            self._delete_file(key)
+            self._delete_file_checked(key)
             return
         if self._platform is Platform.MACOS:
             raise SecretStoreError("cannot confirm deletion from the OS credential store while it is unavailable")
-        self._delete_file(key)
+        self._delete_file_checked(key)
+
+    def _delete_file_checked(self, key: str) -> None:
+        try:
+            self._delete_file(key)
+        except OSError as exc:
+            raise SecretStoreError("could not delete stored file credential") from exc
 
 
 class Registry:

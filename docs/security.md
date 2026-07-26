@@ -104,7 +104,7 @@ a strong, unique passphrase; archive security depends on its entropy.
 | Provider-scoped account name, type, account id, email, added timestamp, active hint | `registry.json` (`0600`) | No — never a token |
 | Original registry before automatic v1-to-v2 migration | `registry.v1.json.bak` (`0600`) | No — never a token |
 | Access token, refresh token, API key | Linux `secrets/*.enc` (`0600`), or macOS Keychain/file fallback | Yes |
-| Pre-switch/pristine/unclaimed `auth.json` snapshots | `backups/*.json` (`0600`, dir `0700`) | Yes — full credential records |
+| Pre-switch/pristine/unclaimed/discarded-restore `auth.json` snapshots | `backups/*.json` (`0600`, dir `0700`) | Yes — full credential records |
 | Explicit portable account export | User-selected path (`0600`, AES-256 encrypted) | Yes — delete after import |
 | `opencode-swap`'s own lock file | `.lock` (empty, no data) | No |
 

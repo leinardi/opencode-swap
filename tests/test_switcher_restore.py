@@ -4,7 +4,7 @@ import time
 
 import pytest
 
-from opencode_swap import backup
+from opencode_swap import backup, opencode_auth
 from opencode_swap.exceptions import OpenCodeSwapError
 from opencode_swap.models import Platform
 from opencode_swap.switcher import Switcher
@@ -117,6 +117,48 @@ def test_restore_write_failure_preserves_restore_source(switcher, monkeypatch):
     with pytest.raises(OpenCodeSwapError, match="previous restore failed"):
         switcher.restore(source="bak")
     assert json.loads(snapshot.read_text())["openai"]["accountId"] == "acct-a"
+
+
+def test_restore_discard_pending_hint_is_in_the_error(switcher, monkeypatch):
+    _setup_two_accounts(switcher)
+    switcher.use_account("a")
+    switcher.use_account("b")
+    monkeypatch.setattr("opencode_swap.opencode_auth.atomic_write_auth", lambda *args: (_ for _ in ()).throw(RuntimeError("boom")))
+    with pytest.raises(RuntimeError):
+        switcher.restore(source="bak")
+
+    with pytest.raises(OpenCodeSwapError, match="--discard-pending"):
+        switcher.restore(source="bak")
+
+
+def test_restore_discard_pending_drops_stuck_snapshot_and_proceeds(switcher, monkeypatch):
+    """A crash between write_restore_snapshot and the live replace leaves a
+    `.restore` snapshot that would otherwise block every future restore
+    forever. --discard-pending is the documented escape hatch."""
+    _setup_two_accounts(switcher)
+    switcher.use_account("a")  # .bak now holds whatever was live before (b)
+
+    original_write = opencode_auth.atomic_write_auth
+    monkeypatch.setattr("opencode_swap.opencode_auth.atomic_write_auth", lambda *args: (_ for _ in ()).throw(RuntimeError("boom")))
+    with pytest.raises(RuntimeError):
+        switcher.restore(source="bak")
+    snapshot = switcher.data_root / "backups" / backup.RESTORE_SNAPSHOT_FILENAME
+    assert snapshot.exists()
+    # The failed attempt's chaining step already moved current live (a) into
+    # .bak before the (mocked) live write failed.
+    assert backup.read_bak(switcher.data_root)["openai"]["accountId"] == "acct-a"
+
+    monkeypatch.setattr("opencode_swap.opencode_auth.atomic_write_auth", original_write)
+    metas = switcher.restore(source="bak", discard_pending=True)
+
+    assert not snapshot.exists()
+    assert [meta.name for meta in metas] == ["a"]
+    assert live_openai(switcher.opencode_auth_path)["accountId"] == "acct-a"
+
+    # The discarded pending snapshot (b's state) must be archived, not lost.
+    archived = list((switcher.data_root / "backups").glob("discarded-restore-*.json"))
+    assert len(archived) == 1
+    assert json.loads(archived[0].read_text())["openai"]["accountId"] == "acct-b"
 
 
 def test_restore_clears_marker_when_live_replacement_already_committed(switcher, monkeypatch):

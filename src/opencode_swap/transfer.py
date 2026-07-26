@@ -68,7 +68,7 @@ def write_archive(path: Path, entries: list[TransferEntry], password: str) -> No
     except FileExistsError as exc:
         raise TransferError(f"refusing to overwrite existing export file: {path}") from exc
     except OSError as exc:
-        raise TransferError(f"could not write export file: {path}") from exc
+        raise TransferError(f"could not write export file: {path} ({exc})") from exc
 
 
 def _unique_object(pairs: list[tuple[str, object]]) -> JsonObject:

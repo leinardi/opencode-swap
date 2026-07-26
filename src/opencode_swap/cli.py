@@ -17,7 +17,7 @@ from datetime import datetime
 from pathlib import Path
 
 from opencode_swap import __version__, backup, opencode_auth, paths, process_detection
-from opencode_swap.exceptions import AuthFileError, OpenCodeSwapError, SchemaError
+from opencode_swap.exceptions import AuthFileError, BackupError, OpenCodeSwapError, SchemaError
 from opencode_swap.models import ImportConflictAction, Validity
 from opencode_swap.providers import get_provider
 from opencode_swap.switcher import Switcher
@@ -86,6 +86,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--pristine",
         action="store_true",
         help="restore the original pristine snapshot instead of the most recent pre-switch backup",
+    )
+    restore_p.add_argument(
+        "--discard-pending",
+        action="store_true",
+        help=("archive a retained failed-restore recovery snapshot under backups/ and proceed, instead of refusing to restore"),
     )
     restore_p.add_argument("-y", "--yes", action="store_true", help="don't prompt for confirmation")
 
@@ -248,24 +253,55 @@ def _status_usage(snapshot: UsageSnapshot | None) -> dict[str, object]:
     return result
 
 
+def _incompatible_reason(provider_id: str, live_auth: dict[str, object], exc: Exception) -> str:
+    """`current_from_auth`'s SchemaError can come from two unrelated places:
+    OpenCode's own live record for this provider not matching a known shape
+    (a real compatibility gap), or opencode-swap's *own* stored secret for a
+    managed account failing to parse while resolving which account owns the
+    live record (a local secret-store problem with a different remedy: re-run
+    `add`, not wait for a schema fix). Re-run just the live-record parse,
+    which has no side effects, to tell the two apart for the reported reason.
+    """
+    try:
+        get_provider(provider_id).extract(live_auth)
+    except (SchemaError, ValueError):
+        return str(exc)
+    return f"cannot determine active account: {exc}"
+
+
 def _status_payload(switcher: Switcher, provider_id: str | None, include_usage: bool) -> dict[str, object]:
+    """Build the `status --json` payload.
+
+    Compatibility contract for `schema_version`: it is bumped only for a
+    breaking change to this shape (a field removed, renamed, or repurposed).
+    Adding a new `active.state` value (as "incompatible" was added here) or a
+    new optional field is *not* a bump -- consumers, including the bundled
+    TUI plugin (a separately-versioned npm package that can trail the CLI),
+    must tolerate unknown `state` values and unknown fields rather than
+    assuming the set present at the time they were written is exhaustive.
+    """
     accounts = switcher.registry.scoped_accounts(provider_id)
     live_auth = opencode_auth.read_auth(switcher.opencode_auth_path) if switcher.opencode_auth_path.exists() else {}
     providers: list[dict[str, object]] = []
     for current_provider_id in _status_provider_ids(switcher, provider_id, live_auth):
-        current, desc = switcher.current_from_auth(live_auth, current_provider_id)
         provider_accounts = [
             {"name": meta.name, "type": meta.type}
             for (stored_provider_id, _), meta in sorted(accounts.items())
             if stored_provider_id == current_provider_id
         ]
         active: dict[str, object]
-        if current is not None:
-            active = {"state": "managed", "name": current.name}
-        elif desc is not None:
-            active = {"state": "unmanaged"}
+        try:
+            current, desc = switcher.current_from_auth(live_auth, current_provider_id)
+        except (SchemaError, ValueError) as exc:
+            current = None
+            active = {"state": "incompatible", "reason": _incompatible_reason(current_provider_id, live_auth, exc)}
         else:
-            active = {"state": "none"}
+            if current is not None:
+                active = {"state": "managed", "name": current.name}
+            elif desc is not None:
+                active = {"state": "unmanaged"}
+            else:
+                active = {"state": "none"}
 
         entry: dict[str, object] = {
             "id": current_provider_id,
@@ -296,6 +332,8 @@ def cmd_status(switcher: Switcher, args: argparse.Namespace) -> int:
             line = f"{provider_id}: {active['name']}"
         elif state == "unmanaged":
             line = f"{provider_id}: active account opencode-swap doesn't manage"
+        elif state == "incompatible":
+            line = f"{provider_id}: {active.get('reason')}"
         else:
             line = f"{provider_id}: no active account"
         usage_snapshot = provider.get("usage")
@@ -432,14 +470,14 @@ def cmd_import(switcher: Switcher, args: argparse.Namespace) -> int:
 def cmd_restore(switcher: Switcher, args: argparse.Namespace) -> int:
     source = "pristine" if args.pristine else "bak"
     which = "original pristine" if args.pristine else "most recent pre-switch"
-    if not _confirm(
-        f"Restore OpenCode's auth.json from the {which} backup? This overwrites the current live auth.json.",
-        args.yes,
-    ):
+    prompt = f"Restore OpenCode's auth.json from the {which} backup? This overwrites the current live auth.json."
+    if args.discard_pending:
+        prompt += " This also archives a retained failed-restore recovery snapshot under backups/ before proceeding."
+    if not _confirm(prompt, args.yes):
         print("Aborted.", file=sys.stderr)
         return 1
 
-    metas = switcher.restore(source=source)
+    metas = switcher.restore(source=source, discard_pending=args.discard_pending)
     if metas:
         accounts = ", ".join(f"{meta.provider}:{meta.name}" for meta in sorted(metas, key=lambda item: (item.provider, item.name)))
         print(f"Restored. Active managed accounts: {accounts}.")
@@ -483,6 +521,15 @@ def cmd_doctor(switcher: Switcher, args: argparse.Namespace) -> int:
     print(f"  active (per registry): {', '.join(active) if active else 'none'}")
     print(f"  .bak present: {'yes' if backup.read_bak(switcher.data_root) is not None else 'no'}")
     print(f"  .pristine present: {'yes' if backup.read_pristine(switcher.data_root) is not None else 'no'}")
+    try:
+        pending_restore = backup.read_restore_snapshot(switcher.data_root) is not None
+        restore_status = "yes" if pending_restore else "no"
+    except BackupError:
+        restore_status = "unreadable"
+    if restore_status != "no":
+        print(f"  .restore pending: {restore_status} (run `opencode-swap restore --discard-pending` to clear it)")
+    else:
+        print(f"  .restore pending: {restore_status}")
 
     print(f"OpenCode process detected: {'yes' if process_detection.is_opencode_running() else 'no'}")
     return 0

@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from opencode_swap import backup, opencode_auth
-from opencode_swap.exceptions import OpenCodeSwapError, SchemaError
+from opencode_swap import backup, macos_keychain, opencode_auth
+from opencode_swap.exceptions import OpenCodeSwapError, SchemaError, SecretStoreError
 from opencode_swap.models import Platform
 from opencode_swap.switcher import Switcher
 from tests.helpers import make_jwt
@@ -200,6 +200,76 @@ def test_use_unclaimed_foreign_login_is_stashed(switcher):
     assert len(unclaimed) == 1
     assert json.loads(unclaimed[0].read_text())["accountId"] == "acct-unknown"
     assert live_openai(switcher.opencode_auth_path)["accountId"] == "acct-a"
+
+
+def test_use_aborts_instead_of_orphaning_credential_on_keychain_outage(tmp_path, monkeypatch):
+    """A macOS Keychain outage must not be misread as "this account's
+    secret is absent" (which would misclassify the live, still-owned
+    credential as foreign and stash it as unclaimed while reporting a
+    successful switch). It must instead abort the switch before auth.json
+    or the secret store are touched."""
+
+    class FlakyKeychain:
+        """Answers the first `succeed_for` reads normally, then errors on
+        every call after that -- reproducing a Keychain that goes
+        unreachable partway through a single `use_account` invocation
+        (screen lock, SSH session, `security` timeout), rather than being
+        down from the very start."""
+
+        def __init__(self):
+            self.data: dict[tuple[str, str], str] = {}
+            self.succeed_for = 0
+            self._reads = 0
+
+        def get_password(self, service, account):
+            self._reads += 1
+            if self._reads > self.succeed_for:
+                raise macos_keychain.KeychainError("boom")
+            return self.data.get((service, account))
+
+        def set_password(self, service, account, value):
+            self.data[(service, account)] = value
+
+        def delete_password(self, service, account):
+            self.data.pop((service, account), None)
+
+    keychain = FlakyKeychain()
+    keychain.succeed_for = 10_000  # unlimited during setup
+    monkeypatch.setattr(macos_keychain, "get_password", keychain.get_password)
+    monkeypatch.setattr(macos_keychain, "set_password", keychain.set_password)
+    monkeypatch.setattr(macos_keychain, "delete_password", keychain.delete_password)
+
+    auth_path = tmp_path / "opencode" / "auth.json"
+    data_root = tmp_path / "opencode-swap"
+    switcher = Switcher(opencode_auth_path=auth_path, data_root=data_root, platform=Platform.MACOS)
+
+    write_auth(auth_path, oauth_entry(account_id="acct-a", refresh="r1"))
+    switcher.add_account("work")
+    write_auth(auth_path, oauth_entry(account_id="acct-b", refresh="r1b"))
+    switcher.add_account("home")
+    # `work` is live again, with a rotated refresh token opencode itself wrote.
+    write_auth(auth_path, oauth_entry(account_id="acct-a", refresh="r2-rotated"))
+    auth_before = json.loads(auth_path.read_text())
+    work_secret_before = switcher.secrets.get("openai:work")
+
+    # The outage starts after the target record's own read succeeds (as in
+    # the real finding), then fails every read after that.
+    keychain._reads = 0
+    keychain.succeed_for = 1
+    with pytest.raises(SecretStoreError):
+        switcher.use_account("home")
+
+    assert json.loads(auth_path.read_text()) == auth_before
+    assert list((data_root / "backups").glob("unclaimed-*.json")) == []
+
+    # This SecretStore instance now stickily pins to the file backend (by
+    # design, once an OS-backend call has failed). Recovery is verified
+    # through a fresh instance -- e.g. the next CLI invocation -- once the
+    # Keychain is healthy again, exactly like a real second `opencode-swap`
+    # call after the outage clears.
+    keychain.succeed_for = 10_000
+    recovered = Switcher(opencode_auth_path=auth_path, data_root=data_root, platform=Platform.MACOS)
+    assert recovered.secrets.get("openai:work") == work_secret_before
 
 
 def test_pristine_snapshot_written_once(switcher):

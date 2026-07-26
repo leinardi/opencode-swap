@@ -161,7 +161,6 @@ class SwitchTransaction:
     """
 
     original_auth: JsonObject
-    original_active: str | None
     completed_steps: list[str] = field(default_factory=list)
 
     def record_step(self, step: str) -> None:

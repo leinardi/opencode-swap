@@ -10,6 +10,12 @@ reset_at, and limit_window_seconds.
 No caching, no polling, no persistence, and never called unless the caller
 explicitly opts in — every other opencode-swap command is intentionally
 local/offline-only, and this is the one exception, kept opt-in on purpose.
+
+The CLI itself only calls this with `--usage`. The bundled OpenCode TUI
+plugin (integrations/opencode-tui-plugin) is a different caller with its own
+default: it opts in automatically and polls every 60 seconds for the active
+managed account, unless its own `usage` option is set to `false`. See that
+plugin's README "Network access" section for what that sends where.
 """
 
 from __future__ import annotations
