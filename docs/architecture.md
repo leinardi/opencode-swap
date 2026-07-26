@@ -44,6 +44,8 @@ src/opencode_swap/
   process_detection.py best-effort "is OpenCode running" check
   exceptions.py        exception hierarchy
   atomic.py            shared atomic-write primitive (temp file + chmod + rename)
+integrations/
+  opencode-tui-plugin/ optional OpenCode TUI plugin; presentation + CLI subprocess bridge only
 ```
 
 Responsibility boundaries are deliberate:
@@ -57,6 +59,9 @@ Responsibility boundaries are deliberate:
   provider-scoped non-secret account metadata and active hints.
 - `switcher.py` is the only module that ties all of the above together into
   actual operations, and the only place that holds the lock.
+- The optional TUI plugin reads only `opencode-swap status --json` and invokes
+  existing CLI operations. It never reads credential storage or `auth.json`,
+  so it cannot bypass the switch transaction.
 
 Static API-key providers use `ApiProvider` without registration. OAuth is
 registered explicitly because the common OpenCode record shape does not imply

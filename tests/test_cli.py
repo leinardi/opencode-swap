@@ -200,6 +200,116 @@ def test_current_managed(tmp_path, capsys):
     assert "work" in capsys.readouterr().out
 
 
+def test_status_json_lists_managed_account_without_secret(tmp_path, capsys):
+    secret = "super-secret-refresh-token"
+    write_live_account(tmp_path, account_id="acct-1", refresh=secret)
+    assert cli.main(["add", "openai", "work"]) == 0
+    capsys.readouterr()
+
+    assert cli.main(["status", "--json"]) == 0
+    output = capsys.readouterr().out
+
+    assert json.loads(output) == {
+        "schema_version": 1,
+        "providers": [
+            {
+                "id": "openai",
+                "accounts": [{"name": "work", "type": "oauth"}],
+                "active": {"state": "managed", "name": "work"},
+            }
+        ],
+    }
+    assert secret not in output
+    assert "acct-1" not in output
+
+
+def test_status_json_marks_foreign_live_account_unmanaged(tmp_path, capsys):
+    write_live_account(tmp_path, account_id="acct-1")
+    assert cli.main(["add", "openai", "work"]) == 0
+    write_live_account(tmp_path, account_id="foreign")
+    capsys.readouterr()
+
+    assert cli.main(["status", "--json"]) == 0
+
+    assert json.loads(capsys.readouterr().out)["providers"][0]["active"] == {"state": "unmanaged"}
+
+
+def test_status_malformed_auth_fails_loud_without_saved_accounts(tmp_path, capsys):
+    path = auth_path(tmp_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{")
+
+    assert cli.main(["status", "--json"]) == 1
+    captured = capsys.readouterr()
+    assert not captured.out
+    assert "opencode-swap:" in captured.err
+
+
+def test_status_malformed_auth_fails_loud_with_saved_accounts(tmp_path, capsys):
+    write_live_account(tmp_path, account_id="acct-1")
+    assert cli.main(["add", "openai", "work"]) == 0
+    auth_path(tmp_path).write_text("{")
+    capsys.readouterr()
+
+    assert cli.main(["status", "--json"]) == 1
+    captured = capsys.readouterr()
+    assert not captured.out
+    assert "opencode-swap:" in captured.err
+
+
+def test_status_usage_fetches_only_active_managed_account(tmp_path, monkeypatch, capsys):
+    write_live_account(tmp_path, account_id="acct-1")
+    assert cli.main(["add", "openai", "work"]) == 0
+    write_live_account(tmp_path, account_id="acct-2")
+    assert cli.main(["add", "openai", "personal"]) == 0
+    assert cli.main(["use", "openai", "work", "--yes"]) == 0
+    capsys.readouterr()
+    calls = []
+
+    def fetch(*args):
+        calls.append(args)
+        return UsageSnapshot(available=True, used_percent=17, plan_name="ChatGPT Plus", reset_at=1_750_000_000_000)
+
+    monkeypatch.setattr("opencode_swap.switcher.usage.fetch_openai_oauth_usage", fetch)
+    assert cli.main(["status", "--json", "--usage"]) == 0
+    result = json.loads(capsys.readouterr().out)
+
+    assert len(calls) == 1
+    assert result["providers"][0]["usage"] == {
+        "applicable": True,
+        "available": True,
+        "used_percent": 17,
+        "plan_name": "ChatGPT Plus",
+        "reset_at": 1_750_000_000_000,
+    }
+
+
+def test_status_without_usage_never_touches_network(tmp_path, monkeypatch, capsys):
+    write_live_account(tmp_path, account_id="acct-1")
+    assert cli.main(["add", "openai", "work"]) == 0
+    capsys.readouterr()
+
+    def boom(*args, **kwargs):
+        raise AssertionError("network should not be touched without --usage")
+
+    monkeypatch.setattr("opencode_swap.usage.urllib.request.urlopen", boom)
+    assert cli.main(["status", "--json"]) == 0
+
+
+def test_status_usage_does_not_query_unmanaged_active_account(tmp_path, monkeypatch, capsys):
+    write_live_account(tmp_path, account_id="acct-1")
+    assert cli.main(["add", "openai", "work"]) == 0
+    write_live_account(tmp_path, account_id="foreign")
+    capsys.readouterr()
+
+    def boom(*args, **kwargs):
+        raise AssertionError("usage must not query a foreign active account")
+
+    monkeypatch.setattr("opencode_swap.usage.urllib.request.urlopen", boom)
+    assert cli.main(["status", "--json", "--usage"]) == 0
+    assert "usage" not in json.loads(capsys.readouterr().out)["providers"][0]
+
+
 def test_current_explicit_incompatible_provider_fails(tmp_path, capsys):
     path = auth_path(tmp_path)
     path.parent.mkdir(parents=True, exist_ok=True)

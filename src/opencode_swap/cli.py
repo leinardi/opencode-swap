@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import json
 import math
 import sys
 import time
@@ -45,6 +46,15 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     current_p = subparsers.add_parser("current", help="show which managed accounts are active")
     current_p.add_argument("provider", nargs="?", help="optional provider id filter")
+
+    status_p = subparsers.add_parser("status", help="show integration status")
+    status_p.add_argument("provider", nargs="?", help="optional provider id filter")
+    status_p.add_argument("--json", action="store_true", help="emit versioned machine-readable status")
+    status_p.add_argument(
+        "--usage",
+        action="store_true",
+        help="fetch usage for active managed accounts where supported (network calls; off by default)",
+    )
 
     use_p = subparsers.add_parser("use", help="switch a provider's active account")
     use_p.add_argument("provider", help="OpenCode provider id")
@@ -190,6 +200,105 @@ def _format_usage(snapshot: UsageSnapshot | None) -> str:
     if snapshot.plan_name:
         parts.append(snapshot.plan_name)
     return "  usage: " + ", ".join(parts)
+
+
+def _status_provider_ids(switcher: Switcher, provider_id: str | None, live_auth: dict[str, object]) -> list[str]:
+    if provider_id:
+        return [provider_id]
+
+    provider_ids = {meta.provider for meta in switcher.registry.scoped_accounts().values()}
+    provider_ids.update(live_auth)
+    return sorted(provider_ids)
+
+
+def _status_usage(snapshot: UsageSnapshot | None) -> dict[str, object]:
+    if snapshot is None:
+        return {"applicable": False}
+
+    result: dict[str, object] = {
+        "applicable": True,
+        "available": snapshot.available,
+    }
+    if snapshot.available:
+        try:
+            valid_percent = (
+                isinstance(snapshot.used_percent, (int, float))
+                and not isinstance(snapshot.used_percent, bool)
+                and math.isfinite(snapshot.used_percent)
+            )
+            valid_reset = isinstance(snapshot.reset_at, (int, float)) and not isinstance(snapshot.reset_at, bool) and math.isfinite(snapshot.reset_at)
+        except OverflowError:
+            valid_percent = False
+            valid_reset = False
+        if valid_percent:
+            result["used_percent"] = snapshot.used_percent
+        if snapshot.plan_name:
+            result["plan_name"] = snapshot.plan_name
+        if valid_reset:
+            result["reset_at"] = snapshot.reset_at
+    return result
+
+
+def _status_payload(switcher: Switcher, provider_id: str | None, include_usage: bool) -> dict[str, object]:
+    accounts = switcher.registry.scoped_accounts(provider_id)
+    live_auth = opencode_auth.read_auth(switcher.opencode_auth_path) if switcher.opencode_auth_path.exists() else {}
+    providers: list[dict[str, object]] = []
+    for current_provider_id in _status_provider_ids(switcher, provider_id, live_auth):
+        current, desc = switcher.current_from_auth(live_auth, current_provider_id)
+        provider_accounts = [
+            {"name": meta.name, "type": meta.type}
+            for (stored_provider_id, _), meta in sorted(accounts.items())
+            if stored_provider_id == current_provider_id
+        ]
+        active: dict[str, object]
+        if current is not None:
+            active = {"state": "managed", "name": current.name}
+        elif desc is not None:
+            active = {"state": "unmanaged"}
+        else:
+            active = {"state": "none"}
+
+        entry: dict[str, object] = {
+            "id": current_provider_id,
+            "accounts": provider_accounts,
+            "active": active,
+        }
+        if include_usage and current is not None:
+            entry["usage"] = _status_usage(switcher.fetch_usage(current.name, provider_id=current_provider_id))
+        providers.append(entry)
+    return {"schema_version": 1, "providers": providers}
+
+
+def cmd_status(switcher: Switcher, args: argparse.Namespace) -> int:
+    payload = _status_payload(switcher, args.provider, args.usage)
+    if args.json:
+        print(json.dumps(payload, separators=(",", ":"), allow_nan=False))
+        return 0
+
+    providers = payload["providers"]
+    assert isinstance(providers, list)
+    for provider in providers:
+        assert isinstance(provider, dict)
+        active = provider["active"]
+        assert isinstance(active, dict)
+        provider_id = provider["id"]
+        state = active["state"]
+        if state == "managed":
+            line = f"{provider_id}: {active['name']}"
+        elif state == "unmanaged":
+            line = f"{provider_id}: active account opencode-swap doesn't manage"
+        else:
+            line = f"{provider_id}: no active account"
+        usage_snapshot = provider.get("usage")
+        if isinstance(usage_snapshot, dict):
+            if not usage_snapshot.get("applicable"):
+                line += "  usage: n/a"
+            elif not usage_snapshot.get("available"):
+                line += "  usage: unavailable"
+            elif "used_percent" in usage_snapshot:
+                line += f"  usage: {usage_snapshot['used_percent']:.0f}%"
+        print(line)
+    return 0
 
 
 def cmd_current(switcher: Switcher, args: argparse.Namespace) -> int:
@@ -374,6 +483,7 @@ _HANDLERS = {
     "add": cmd_add,
     "list": cmd_list,
     "current": cmd_current,
+    "status": cmd_status,
     "use": cmd_use,
     "switch": cmd_switch,
     "remove": cmd_remove,

@@ -10,7 +10,7 @@ MK_COMMON_DIR := $(REPO_ROOT)/.mk
 MK_COMMON_FILES := help.mk password.mk pre-commit.mk
 
 # Repo-local snippets that are NOT in make-common
-MK_LOCAL_FILES := python.mk run.mk verify.mk clean.mk
+MK_LOCAL_FILES := python.mk run.mk verify.mk tui-plugin.mk clean.mk
 
 MK_COMMON_BOOTSTRAP_SCRIPT := $(REPO_ROOT)/scripts/bootstrap-mk-common.sh
 

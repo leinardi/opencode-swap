@@ -13,8 +13,9 @@ and swaps the one OpenCode currently considers "active."
 opencode-swap use openai personal && opencode
 ```
 
-That's the whole workflow. No OpenCode plugin, no background process, no
-proxy — `opencode-swap` isn't running while OpenCode is.
+Core workflow stays standalone: no background process or proxy runs while
+OpenCode is. An optional terminal UI plugin adds account status and commands
+without taking ownership of credentials or swaps.
 
 ## Status
 
@@ -90,6 +91,7 @@ tokens in place — it won't create a duplicate.
 | `opencode-swap add <provider> <name>` | Import the provider's currently-active account under `<name>`. |
 | `opencode-swap list [provider]` | List every saved account, or filter by provider. |
 | `opencode-swap current [provider]` | Show active managed accounts for every provider, or one provider. |
+| `opencode-swap status [provider] [--json] [--usage]` | Show integration status; `--json` emits versioned secret-safe data. |
 | `opencode-swap use <provider> <name> [-y]` | Activate one saved provider account. |
 | `opencode-swap switch <provider> [-y]` | Switch to next saved account for provider. |
 | `opencode-swap remove <provider> <name> [-y]` | Delete a saved provider account. |
@@ -108,6 +110,26 @@ condition this tool can't fully close (see
 
 No command ever prints an access token, refresh token, or API key. Account
 ids are shown truncated to their last four characters.
+
+## OpenCode TUI integration
+
+[`integrations/opencode-tui-plugin`](integrations/opencode-tui-plugin) uses
+OpenCode's supported TUI-plugin API to render active account and active-only
+usage at right side of session prompt metadata:
+
+```text
+Plan · GPT-5.6 Sol OpenAI · medium                         work · 17%
+```
+
+It only appears after session has sent a request through provider managed by
+`opencode-swap`; it stays hidden for unrelated providers. `/swap` opens a
+safe account picker, `/swap-next` rotates current provider, and `/swap-refresh`
+refreshes visible status. See the
+[plugin README](integrations/opencode-tui-plugin/README.md) for install and
+concurrency limits.
+
+Core CLI does not require Bun. TUI plugin development and root `make verify`
+require Bun 1.3.14; `make check` remains Python-only and offline.
 
 ### Moving accounts to another computer
 

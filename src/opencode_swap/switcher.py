@@ -641,9 +641,14 @@ class Switcher:
         into an account opencode-swap hasn't been told to manage.
         """
         try:
-            record = self._read_live_record(provider_id)
+            auth = opencode_auth.read_auth(self.opencode_auth_path)
         except AuthFileError:
             return None, None
+        return self.current_from_auth(auth, provider_id)
+
+    def current_from_auth(self, auth: JsonObject, provider_id: str = "openai") -> tuple[AccountMeta | None, AccountDesc | None]:
+        """Identify current provider account from already-validated auth data."""
+        record = self._provider(provider_id).extract(auth)
         if record is None:
             return None, None
 

@@ -218,3 +218,6 @@ __marimo__/
 
 # Password-encrypted opencode-swap account exports
 *.ocs
+
+# OpenCode TUI plugin dependencies (bun.lock is committed).
+integrations/opencode-tui-plugin/node_modules/
