@@ -4,8 +4,8 @@ import time
 
 import pytest
 
-from opencode_swap import cli, process_detection
-from opencode_swap.models import Platform
+from opencode_swap import cli, process_detection, transfer
+from opencode_swap.models import AccountMeta, Platform
 from opencode_swap.usage import UsageSnapshot
 from tests.helpers import make_jwt
 
@@ -299,6 +299,66 @@ def test_rename(tmp_path, capsys):
 def test_rename_unknown_fails_cleanly(capsys):
     assert cli.main(["rename", "ghost", "new"]) == 1
     assert "opencode-swap:" in capsys.readouterr().err
+
+
+def test_export_import_roundtrip_with_hidden_password(tmp_path, monkeypatch, capsys):
+    secret = "super-secret-refresh-token"
+    write_live_account(tmp_path, account_id="acct-1", refresh=secret)
+    assert cli.main(["add", "work"]) == 0
+    archive = tmp_path / "accounts.ocs"
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+    passwords = iter(["password", "password", "password"])
+    monkeypatch.setattr(cli.getpass, "getpass", lambda prompt: next(passwords))
+
+    assert cli.main(["export", str(archive)]) == 0
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "mac"))
+    assert cli.main(["import", str(archive)]) == 0
+
+    combined = "".join(capsys.readouterr())
+    assert secret not in combined
+    assert secret.encode() not in archive.read_bytes()
+    assert "work" in cli.Switcher.default().registry.accounts()
+
+
+def test_export_refuses_noninteractive_password_prompt(tmp_path, capsys):
+    write_live_account(tmp_path)
+    cli.main(["add", "work"])
+    capsys.readouterr()
+
+    assert cli.main(["export", str(tmp_path / "accounts.ocs")]) == 1
+    assert "interactive terminal" in capsys.readouterr().err
+
+
+def test_import_list_never_prints_another_account_credential(tmp_path, monkeypatch, capsys):
+    secret = "account-a-super-secret-refresh"
+    record_a = {
+        "type": "oauth",
+        "refresh": secret,
+        "access": make_jwt({"chatgpt_account_id": "acct-a"}),
+        "expires": int((time.time() + 3600) * 1000),
+        "accountId": "acct-a",
+    }
+    record_b = {
+        "type": "oauth",
+        "refresh": "refresh-b",
+        "access": make_jwt({"chatgpt_account_id": "acct-b", "email": secret}),
+        "expires": int((time.time() + 3600) * 1000),
+        "accountId": "acct-b",
+    }
+    entries = [
+        transfer.TransferEntry(AccountMeta("a", "openai", "oauth", "acct-a", None, "2026-01-01T00:00:00Z"), record_a),
+        transfer.TransferEntry(AccountMeta("b", "openai", "oauth", "acct-b", None, "2026-01-01T00:00:00Z"), record_b),
+    ]
+    archive = tmp_path / "accounts.ocs"
+    transfer.write_archive(archive, entries, "password")
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(cli.getpass, "getpass", lambda prompt: "password")
+
+    assert cli.main(["import", str(archive)]) == 0
+    assert cli.main(["list"]) == 0
+
+    assert secret not in "".join(capsys.readouterr())
+    assert secret not in (tmp_path / "opencode-swap" / "registry.json").read_text()
 
 
 def test_doctor_runs_clean_with_no_state(capsys):

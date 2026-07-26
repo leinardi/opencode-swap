@@ -7,10 +7,10 @@
   command surface is small enough that a framework would be net overhead).
 - **Packaging:** `hatchling` + `uv` (`pyproject.toml`), console scripts
   `opencode-swap` and `ocs`.
-- **Dependencies:** exactly one, `keyring` (Linux only — see
-  [Storage layout](#storage-layout) below). macOS goes through a
+- **Dependencies:** `keyring` on Linux for Secret Service, plus `pyzipper`
+  for password-encrypted portable account archives. macOS goes through a
   subprocess wrapper around the system `/usr/bin/security` CLI instead of a
-  Python dependency.
+  Python keychain dependency.
 - **Testing:** `pytest`, no other test dependencies. No network access, no
   real OS keychain/keyring access, no real `auth.json` access required to
   run the suite (see `docs/testing.md`).
@@ -36,6 +36,7 @@ src/opencode_swap/
   oauth_jwt.py         JWT claim decoding (accountId/email extraction) — no network
   paths.py             resolves OpenCode's auth.json path and opencode-swap's own data dir
   backup.py            .bak / .pristine / unclaimed-*.json snapshots
+  transfer.py          versioned password-encrypted account archive format
   locking.py           FileLock (fcntl-based, POSIX only)
   macos_keychain.py    subprocess wrapper around /usr/bin/security
   process_detection.py best-effort "is OpenCode running" check
@@ -193,6 +194,30 @@ undoable by restoring again — and it tolerates the live file being
 corrupted JSON (that's exactly the scenario it exists for) as well as a
 backed-up record that can no longer be interpreted (the restore still
 succeeds; only "which account is this" identification is skipped).
+
+## Portable account transfer
+
+`export <path>` packages every registry entry with its corresponding secret
+record in a versioned manifest, then encrypts that manifest in memory using
+the standard WinZip AES-256 format implemented by `pyzipper`. The encrypted
+archive is published atomically with mode `0600`; plaintext credentials are
+never written to a temporary file. Export holds `Switcher.lock` and first
+captures recognizable live token rotation, for the same reason sync-back is
+mandatory before a switch. If the live record does not match a managed
+identity but has the same provider and type as the registry-active account,
+export refuses: an account-id/refresh-token identity transition cannot safely
+be distinguished from a foreign login.
+
+`import <path>` decrypts in memory and strictly validates the archive version,
+manifest shape, provider schema, account names, record types, and duplicate
+identities. While holding `Switcher.lock`, it then preflights every destination
+name, identity, and unregistered secret key. Any conflict aborts before the
+first write. New secrets are written through `SecretStore`, followed by one
+atomic registry publication; a failure attempts to remove every newly written
+secret. Printable metadata is derived from validated records and filtered
+against credential fields from every account in the archive, preventing one
+account's token from entering another account's registry metadata. Import never
+changes OpenCode's live `auth.json` or the destination registry's active marker.
 
 ## Concurrency
 

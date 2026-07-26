@@ -7,7 +7,7 @@ make python-test
 
 The equivalent direct command is `uv run pytest -q`.
 
-184 tests, runs in ~2 seconds. No network access, no real OS
+280 tests, runs in ~3 seconds. No network access, no real OS
 keychain/keyring access, and no access to your real
 `~/.local/share/opencode/auth.json` is required or performed by the suite.
 

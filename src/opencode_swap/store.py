@@ -287,6 +287,18 @@ class Registry:
         accounts[meta.name] = meta.to_dict()
         self._save(data)
 
+    def add_accounts(self, metas: list[AccountMeta]) -> None:
+        """Add several new accounts in one atomic registry publication."""
+        data = self._load()
+        accounts = data["accounts"]
+        assert isinstance(accounts, dict)
+        collisions = [meta.name for meta in metas if meta.name in accounts]
+        if collisions:
+            raise RegistryError(f"account already exists: {collisions[0]}")
+        for meta in metas:
+            accounts[meta.name] = meta.to_dict()
+        self._save(data)
+
     def remove_account(self, name: str) -> None:
         data = self._load()
         accounts = data["accounts"]

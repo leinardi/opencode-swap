@@ -42,3 +42,7 @@ class SecretStoreError(OpenCodeSwapError):
 
 class AccountExistsError(OpenCodeSwapError):
     """`add`/`rename` would create a name or identity collision."""
+
+
+class TransferError(OpenCodeSwapError):
+    """An account transfer archive is unsafe, corrupt, or incompatible."""

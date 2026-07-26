@@ -11,14 +11,15 @@ implementation plan.
 | M3 — Secure account storage | Done | `store.py` (keychain/keyring/file routing, sticky fallback), `macos_keychain.py`, `locking.py`; verified against a real Linux Secret Service keyring. |
 | M4 — OpenAI account import | Done | `Switcher.add_account` — identity dedup, refresh-in-place on re-add. |
 | M5 — Safe account switching | Done | `Switcher.use_account` — sync-back, transaction/rollback, full failure-injection test matrix. |
-| M6 — CLI UX | Done | `add`/`list`/`current`/`use`/`remove`/`rename`/`doctor`. |
+| M6 — CLI UX | Done | `add`/`list`/`current`/`use`/`remove`/`rename`/`export`/`import`/`doctor`. |
 | M7 — Recovery and compatibility | Done | `restore` command (`.bak`/`--pristine`), `doctor` schema/backup reporting. |
 | M8 — Testing | Done | Unit, integration, failure-injection, real multi-thread concurrency, compatibility, and security test categories all covered — see `docs/testing.md`. |
 | M9 — Packaging/release | **Postponed** | Not published to PyPI. Runs from a local checkout via `uv`. |
+| M10 — Portable transfer | Done | Password-encrypted all-account export/import with strict conflict preflight and no live `auth.json` changes. |
 
 ## Current state
 
-167 automated tests, plus several rounds of live verification against a
+280 automated tests, plus several rounds of live verification against a
 real OpenCode installation and real OpenAI account (see
 `docs/testing.md#live-verification`). Two real permission bugs were found
 and fixed during that live verification (data directory and backups

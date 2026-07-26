@@ -11,6 +11,9 @@ dependencies = [
     # binary means creator == reader, so an interpreter rebuild doesn't
     # trigger a "wants to use your keychain" re-prompt.
     "keyring>=25.0.0; sys_platform == 'linux'",
+    # Standard WinZip AES implementation for explicit portable exports.
+    # Credential plaintext stays in memory; no home-grown crypto format.
+    "pyzipper>=0.4.0",
 ]
 authors = [{name = "roberto@leinardi.com"}]
 license = {text = "MIT"}

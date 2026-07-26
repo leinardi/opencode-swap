@@ -12,6 +12,7 @@
 - Tokens appearing in process arguments (visible via `ps`/process listings).
 - Unsafe temporary files during a write.
 - Backups (`.bak`/`.pristine`) containing plaintext credentials at rest.
+- Portable account archives exposed during cross-machine transfer.
 
 ### Explicitly out of scope
 
@@ -75,14 +76,21 @@ cryptography.**
   that account afterward. Both ported directly from `claude-swap`'s
   `credentials.py`.
 
-Deliberately **not** built: any custom encryption scheme, key derivation
-from a user-supplied passphrase, or a "vault" file. All three would add
-real complexity (key management, passphrase UX breaking the one-command
-switch workflow, a new attack surface) without moving the needle against
-the actual threat model above — a same-UID attacker who could read a vault
-file could equally read the passphrase from wherever it's cached, and an
-attacker who *doesn't* have the user's UID is already blocked by OS file
-permissions on every option in the table.
+Deliberately **not** built for persistent storage: any custom encryption
+scheme, app-managed key derivation, or a "vault" file. Those would add real
+complexity to the one-command switch workflow without moving the needle
+against the actual at-rest threat model — a same-UID attacker can already
+read OpenCode's live plaintext `auth.json`.
+
+Portable export is a separate, explicit operation rather than a persistent
+vault. It uses standard WinZip AES-256 through `pyzipper`; opencode-swap does
+not define cryptographic primitives or its own encrypted envelope. The
+passphrase is read from an interactive hidden prompt, never argv, and the
+manifest is encrypted and decrypted entirely in memory. Archives are written
+atomically with mode `0600`, never overwritten implicitly, and should be
+deleted after import. Archive filenames and compressed sizes are not secret;
+the sole member always has the generic name `accounts.json`. Users must choose
+a strong, unique passphrase; archive security depends on its entropy.
 
 ## What's persisted where
 
@@ -91,6 +99,7 @@ permissions on every option in the table.
 | Account name, provider, type, account id, email, added timestamp | `registry.json` (`0600`) | No — never a token |
 | Access token, refresh token, API key | OS keychain/keyring, or `secrets/*.enc` fallback (`0600`) | Yes |
 | Pre-switch/pristine/unclaimed `auth.json` snapshots | `backups/*.json` (`0600`, dir `0700`) | Yes — full credential records |
+| Explicit portable account export | User-selected path (`0600`, AES-256 encrypted) | Yes — delete after import |
 | `opencode-swap`'s own lock file | `.lock` (empty, no data) | No |
 
 The non-secret/secret split is enforced structurally: `AccountMeta` (the

@@ -18,7 +18,7 @@ proxy — `opencode-swap` isn't running while OpenCode is.
 
 ## Status
 
-Early / self-hosted. The core is implemented and tested (184 tests) and has
+Early / self-hosted. The core is implemented and tested (280 tests) and has
 been exercised against a real OpenCode installation, but it isn't packaged
 or released yet — run it from a local checkout with `uv`. See
 [`docs/roadmap.md`](docs/roadmap.md) for what's done and what's left.
@@ -89,6 +89,8 @@ tokens in place — it won't create a duplicate.
 | `opencode-swap switch [-y]` | Switch to next saved OpenAI account, wrapping around after the last account. |
 | `opencode-swap remove <name> [-y]` | Delete a saved account (from both the registry and the secret store). |
 | `opencode-swap rename <old> <new>` | Rename a saved account. |
+| `opencode-swap export <path>` | Export all saved accounts to a new password-encrypted archive. |
+| `opencode-swap import <path>` | Import every account from an encrypted archive; refuses all name or identity conflicts. |
 | `opencode-swap restore [--pristine] [-y]` | Recover `auth.json` from the most recent pre-switch backup, or from the very first snapshot ever taken (`--pristine`). |
 | `opencode-swap doctor` | Diagnose paths, schema compatibility, secret backend, and backup state. |
 
@@ -101,6 +103,29 @@ condition this tool can't fully close (see
 
 No command ever prints an access token, refresh token, or API key. Account
 ids are shown truncated to their last four characters.
+
+### Moving accounts to another computer
+
+```bash
+# Source computer
+opencode-swap export ~/opencode-accounts.ocs
+
+# Transfer the archive, then on the destination computer
+opencode-swap import ~/opencode-accounts.ocs
+opencode-swap use personal
+```
+
+`export` asks for a password twice; `import` asks for it once. Password input
+requires an interactive terminal and is never placed in command arguments or
+printed. The archive is AES-256 encrypted and created with `0600` permissions.
+Import validates every account and checks all destination names and identities
+before writing anything. Any conflict aborts the whole import. Imported
+accounts go through the normal secret backend (macOS Keychain, Linux keyring,
+or file fallback), while the destination's active account and OpenCode
+`auth.json` remain unchanged. Delete the transfer archive after successful
+import. Use a strong, unique archive passphrase; archive security depends on
+its entropy. Export refuses if the live credential cannot be proven to match
+the registry-active account, rather than risk archiving stale rotated tokens.
 
 ## How it works
 
@@ -133,7 +158,9 @@ Credentials are stored via:
   (base64) but not encrypted — the same posture OpenCode's own `auth.json`
   already has.
 
-No custom cryptography. No plaintext database. Full threat model in
+No custom cryptographic protocol. Portable exports use standard WinZip AES-256
+implemented by `pyzipper`; plaintext credentials never touch a temporary file.
+No plaintext database. Full threat model in
 [`docs/security.md`](docs/security.md).
 
 ## Scope

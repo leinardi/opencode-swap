@@ -15,11 +15,11 @@ from __future__ import annotations
 
 import json
 from contextlib import suppress
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
-from opencode_swap import backup, opencode_auth, paths, usage
+from opencode_swap import backup, opencode_auth, paths, transfer, usage
 from opencode_swap.exceptions import AccountExistsError, AuthFileError, OpenCodeSwapError, SchemaError
 from opencode_swap.locking import FileLock
 from opencode_swap.models import (
@@ -43,6 +43,19 @@ def _secret_key(provider_id: str, name: str) -> str:
 
 def _now_iso() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _transfer_added(value: str) -> str:
+    normalized = datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").strftime("%Y-%m-%dT%H:%M:%SZ")
+    if normalized != value:
+        raise ValueError("timestamp is not canonical")
+    return normalized
+
+
+def _without_archive_credential(value: str | None, credentials: set[str]) -> str | None:
+    if value is None or any(secret in value for secret in credentials):
+        return None
+    return value
 
 
 def _same_orphan_record(provider: Provider, stored: AuthRecord, incoming: AuthRecord) -> bool:
@@ -174,6 +187,135 @@ class Switcher:
             self.registry.set_active(name)
 
         return meta
+
+    def _sync_live_for_export(self, accounts: dict[str, AccountMeta]) -> None:
+        if not self.opencode_auth_path.exists():
+            return
+        auth = opencode_auth.read_auth(self.opencode_auth_path)
+        for provider_id in {meta.provider for meta in accounts.values()}:
+            provider = self._provider(provider_id)
+            live_record = provider.extract(auth)
+            if live_record is None:
+                continue
+            live_identity = provider.identity(live_record)
+            owner_name = self._find_by_identity(provider_id, live_identity)
+            if owner_name is not None:
+                stored = self.secrets.get(_secret_key(provider_id, owner_name))
+                if stored is None or json.loads(stored) != live_record.raw:
+                    self.secrets.put(_secret_key(provider_id, owner_name), json.dumps(live_record.raw))
+                continue
+            active_name = self.registry.get_active()
+            active_meta = accounts.get(active_name) if active_name is not None else None
+            if active_meta is None or active_meta.provider != provider_id or active_meta.type != live_record.type:
+                continue
+            raise OpenCodeSwapError(
+                "live credential does not match the registry-active account; cannot safely determine which saved account to refresh before export"
+            )
+
+    def export_accounts(self, path: Path, password: str) -> int:
+        """Export every managed account into a password-encrypted archive."""
+        with self.lock:
+            accounts = self.registry.accounts()
+            if not accounts:
+                raise OpenCodeSwapError("no saved accounts to export")
+            self._sync_live_for_export(accounts)
+
+            entries: list[transfer.TransferEntry] = []
+            for name in sorted(accounts):
+                meta = accounts[name]
+                record = self._load_record(meta.provider, name)
+                if record is None:
+                    raise OpenCodeSwapError(f"no stored credentials for '{name}' (secret store may be unavailable)")
+                try:
+                    _transfer_added(meta.added)
+                except ValueError:
+                    meta = replace(meta, added=_now_iso())
+                entries.append(transfer.TransferEntry(meta=meta, record=record.raw))
+            transfer.write_archive(path, entries, password)
+            return len(entries)
+
+    def import_accounts(self, path: Path, password: str) -> int:  # noqa: PLR0912, PLR0915
+        """Import an archive after strict all-account conflict preflight."""
+        entries = transfer.read_archive(path, password)
+        if not entries:
+            raise OpenCodeSwapError("account archive contains no accounts")
+
+        with self.lock:
+            incoming: list[tuple[AccountMeta, AuthRecord]] = []
+            incoming_identities: set[tuple[str, str]] = set()
+            archive_credentials = {
+                value
+                for entry in entries
+                for field in ("refresh", "access", "key", "token")
+                if isinstance((value := entry.record.get(field)), str) and value
+            }
+            if any(secret in value for entry in entries for value in (entry.meta.name, entry.meta.added) for secret in archive_credentials):
+                raise SchemaError("account archive contains credential data in non-secret metadata")
+            for entry in entries:
+                provider = self._provider(entry.meta.provider)
+                record = provider.extract({entry.meta.provider: entry.record})
+                if record is None:
+                    raise SchemaError(f"imported credentials for '{entry.meta.name}' are missing")
+                if record.type != entry.meta.type:
+                    raise SchemaError(f"imported credentials for '{entry.meta.name}' do not match metadata type")
+                try:
+                    added = _transfer_added(entry.meta.added)
+                except ValueError as exc:
+                    raise SchemaError(f"imported metadata for '{entry.meta.name}' has an invalid added timestamp") from exc
+                desc = provider.describe(record)
+                meta = AccountMeta(
+                    name=entry.meta.name,
+                    provider=entry.meta.provider,
+                    type=record.type,
+                    account_id=_without_archive_credential(desc.account_id, archive_credentials),
+                    email=_without_archive_credential(desc.email, archive_credentials),
+                    added=added,
+                )
+                identity_key = (entry.meta.provider, provider.identity(record))
+                if identity_key in incoming_identities:
+                    raise AccountExistsError("account archive contains duplicate account identities")
+                incoming_identities.add(identity_key)
+                incoming.append((meta, record))
+
+            existing_accounts = self.registry.accounts()
+            for meta, _record in incoming:
+                if meta.name in existing_accounts:
+                    raise AccountExistsError(f"account name '{meta.name}' already exists; import made no changes")
+
+            existing_identities: set[tuple[str, str]] = set()
+            for name, meta in existing_accounts.items():
+                stored = self.secrets.get_confirmed(_secret_key(meta.provider, name))
+                if stored is None:
+                    raise OpenCodeSwapError(f"no stored credentials for existing account '{name}'; import made no changes")
+                record = self._parse_stored_record(meta.provider, name, stored)
+                existing_identities.add((meta.provider, self._provider(meta.provider).identity(record)))
+            if incoming_identities & existing_identities:
+                raise AccountExistsError("an imported account identity is already saved under another name; import made no changes")
+
+            for meta, _record in incoming:
+                if self.secrets.get_confirmed(_secret_key(meta.provider, meta.name)) is not None:
+                    raise AccountExistsError(f"account name '{meta.name}' has unregistered stored credentials; import made no changes")
+
+            attempted_keys: list[str] = []
+            try:
+                for meta, record in incoming:
+                    key = _secret_key(meta.provider, meta.name)
+                    attempted_keys.append(key)
+                    self.secrets.put(key, json.dumps(record.raw))
+                self.registry.add_accounts([meta for meta, _record in incoming])
+            except BaseException as exc:
+                cleanup_failed = False
+                for key in reversed(attempted_keys):
+                    try:
+                        self.secrets.delete(key)
+                    except BaseException:
+                        cleanup_failed = True
+                if cleanup_failed:
+                    raise OpenCodeSwapError(
+                        "import failed and cleanup could not confirm removal of all newly written credentials; registry was not changed"
+                    ) from exc
+                raise
+            return len(incoming)
 
     def use_account(self, name: str) -> AccountMeta:
         """Switch OpenCode's active account to the saved account `name`.

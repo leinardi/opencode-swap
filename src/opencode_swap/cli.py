@@ -8,10 +8,12 @@ the plan's stated CLI redaction policy.
 from __future__ import annotations
 
 import argparse
+import getpass
 import math
 import sys
 import time
 from datetime import datetime
+from pathlib import Path
 
 from opencode_swap import __version__, backup, opencode_auth, paths, process_detection
 from opencode_swap.exceptions import AuthFileError, OpenCodeSwapError, SchemaError
@@ -56,6 +58,12 @@ def _build_parser() -> argparse.ArgumentParser:
     rename_p.add_argument("old", help="current account name")
     rename_p.add_argument("new", help="new account name")
 
+    export_p = subparsers.add_parser("export", help="export saved accounts to a password-encrypted archive")
+    export_p.add_argument("path", help="new archive path (must not already exist)")
+
+    import_p = subparsers.add_parser("import", help="import saved accounts from a password-encrypted archive")
+    import_p.add_argument("path", help="archive path to import")
+
     restore_p = subparsers.add_parser("restore", help="restore OpenCode's auth.json from a backup snapshot")
     restore_p.add_argument(
         "--pristine",
@@ -86,6 +94,20 @@ def _confirm(prompt: str, assume_yes: bool) -> bool:
         return False
     answer = input(f"{prompt} [y/N] ").strip().lower()
     return answer in ("y", "yes")
+
+
+def _prompt_archive_password(*, confirm: bool) -> str:
+    if not sys.stdin.isatty():
+        raise OpenCodeSwapError("archive password requires an interactive terminal")
+    try:
+        password = getpass.getpass("Archive password: ")
+        if not password:
+            raise OpenCodeSwapError("archive password cannot be empty")
+        if confirm and getpass.getpass("Confirm archive password: ") != password:
+            raise OpenCodeSwapError("archive passwords do not match")
+        return password
+    except EOFError as exc:
+        raise OpenCodeSwapError("could not read archive password") from exc
 
 
 def cmd_add(switcher: Switcher, args: argparse.Namespace) -> int:
@@ -202,6 +224,20 @@ def cmd_rename(switcher: Switcher, args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_export(switcher: Switcher, args: argparse.Namespace) -> int:
+    path = Path(args.path).expanduser()
+    count = switcher.export_accounts(path, _prompt_archive_password(confirm=True))
+    print(f"Exported {count} account{'s' if count != 1 else ''} to {path}.")
+    return 0
+
+
+def cmd_import(switcher: Switcher, args: argparse.Namespace) -> int:
+    path = Path(args.path).expanduser()
+    count = switcher.import_accounts(path, _prompt_archive_password(confirm=False))
+    print(f"Imported {count} account{'s' if count != 1 else ''}. Run `opencode-swap use <name>` to activate one.")
+    return 0
+
+
 def cmd_restore(switcher: Switcher, args: argparse.Namespace) -> int:
     source = "pristine" if args.pristine else "bak"
     which = "original pristine" if args.pristine else "most recent pre-switch"
@@ -257,6 +293,8 @@ _HANDLERS = {
     "switch": cmd_switch,
     "remove": cmd_remove,
     "rename": cmd_rename,
+    "export": cmd_export,
+    "import": cmd_import,
     "restore": cmd_restore,
     "doctor": cmd_doctor,
 }
