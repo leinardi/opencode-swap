@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 
 import type { TuiDialogSelectOption, TuiPlugin, TuiPluginApi, TuiPluginModule } from "@opencode-ai/plugin/tui"
-import { Show, createEffect, createSignal, onCleanup } from "solid-js"
+import { Show, createEffect, createMemo, createSignal, on, onCleanup, onMount, untrack } from "solid-js"
 
 type Account = {
   name: string
@@ -18,6 +18,7 @@ type Usage = {
   available?: boolean
   used_percent?: number
   reset_at?: number
+  window_seconds?: number
 }
 
 type ProviderStatus = {
@@ -38,6 +39,7 @@ type AccountChoice = {
 }
 
 const POLL_INTERVAL_MS = 60_000
+const COMMAND_TIMEOUT_MS = 10_000
 
 function command(options: Record<string, unknown> | undefined): string {
   const value = options?.command
@@ -49,9 +51,18 @@ async function run(options: Record<string, unknown> | undefined, args: string[])
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",
+    timeout: COMMAND_TIMEOUT_MS,
   })
-  const [exitCode, stdout] = await Promise.all([process.exited, new Response(process.stdout).text()])
-  if (exitCode !== 0) throw new Error("opencode-swap command failed")
+  const [exitCode, stdout, stderr] = await Promise.all([
+    process.exited,
+    new Response(process.stdout).text(),
+    new Response(process.stderr).text(),
+  ])
+  if (exitCode !== 0) {
+    const reason = exitCode === null ? "timed out" : `exit ${exitCode}`
+    const detail = stderr.trim()
+    throw new Error(`opencode-swap command failed (${reason})${detail ? `: ${detail}` : ""}`)
+  }
   return stdout
 }
 
@@ -62,7 +73,7 @@ function status(value: unknown): Status {
   return result as Status
 }
 
-async function readStatus(api: TuiPluginApi, options: Record<string, unknown> | undefined, provider?: string, usage = false) {
+async function readStatus(options: Record<string, unknown> | undefined, provider?: string, usage = false) {
   const args = ["status"]
   if (provider) args.push(provider)
   args.push("--json")
@@ -70,34 +81,63 @@ async function readStatus(api: TuiPluginApi, options: Record<string, unknown> | 
   return status(JSON.parse(await run(options, args)))
 }
 
-function latestProviderID(api: TuiPluginApi, sessionID: string) {
-  const messages = api.state.session.messages(sessionID)
+function providerIDFromMessages(messages: ReturnType<TuiPluginApi["state"]["session"]["messages"]>) {
+  let assistantProviderID: string | undefined
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index]
     if (message.role === "user" && message.model?.providerID) return message.model.providerID
+    if (message.role === "assistant" && !assistantProviderID) assistantProviderID = message.providerID
   }
+  return assistantProviderID
 }
 
-async function currentStatus(api: TuiPluginApi, options: Record<string, unknown> | undefined, sessionID: string) {
-  const providerID = latestProviderID(api, sessionID)
+function latestProviderID(api: TuiPluginApi, sessionID: string) {
+  return providerIDFromMessages(api.state.session.messages(sessionID)) ?? api.state.session.get(sessionID)?.model?.providerID
+}
+
+async function currentStatus(options: Record<string, unknown> | undefined, providerID: string | undefined) {
   if (!providerID) return
 
-  const summary = await readStatus(api, options)
+  const summary = await readStatus(options)
   const provider = summary.providers.find((item) => item.id === providerID)
   if (!provider || provider.accounts.length === 0) return
   if (provider.active.state !== "managed") return provider
 
-  return (await readStatus(api, options, providerID, true)).providers[0]
+  const detailed = (await readStatus(options, providerID, true)).providers.find((item) => item.id === providerID)
+  return detailed ?? provider
 }
 
 function text(provider: ProviderStatus) {
   if (provider.active.state === "unmanaged") return "unmanaged account"
   if (provider.active.state === "none") return "no active account"
-  const usage = provider.usage
-  if (usage?.applicable && usage.available && typeof usage.used_percent === "number") {
-    return `${provider.active.name} · ${Math.round(usage.used_percent)}%`
-  }
   return provider.active.name
+}
+
+function usageDetails(provider: ProviderStatus) {
+  const usage = provider.usage
+  if (!usage?.applicable || !usage.available || typeof usage.used_percent !== "number" || !Number.isFinite(usage.used_percent)) return
+
+  const percent = Math.round(usage.used_percent)
+  const absoluteBand = percent >= 90 ? "red" : percent >= 70 ? "orange" : percent >= 50 ? "yellow" : "green"
+  const resetAt = usage.reset_at
+  if (typeof resetAt !== "number" || !Number.isFinite(resetAt)) return { percent, band: absoluteBand }
+
+  const windowSeconds = usage.window_seconds
+  let band: "green" | "yellow" | "orange" | "red" = absoluteBand
+  if (typeof windowSeconds === "number" && Number.isFinite(windowSeconds) && windowSeconds > 0) {
+    const windowMs = windowSeconds * 1000
+    const elapsedPercent = ((windowMs - (resetAt - Date.now())) / windowMs) * 100
+    if (elapsedPercent < 5) band = "green"
+    else if (elapsedPercent <= 100) {
+      const ratio = (usage.used_percent / elapsedPercent) * 100
+      band = ratio < 85 ? "green" : ratio < 105 ? "orange" : "red"
+    }
+  }
+  const date = new Date(resetAt)
+  if (Number.isNaN(date.getTime())) return { percent, band }
+  const month = date.toLocaleString(undefined, { month: "short" })
+  const reset = `${month} ${date.getDate()}, ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`
+  return { percent, band, reset }
 }
 
 function StatusView(props: {
@@ -107,42 +147,111 @@ function StatusView(props: {
   refreshers: Set<() => void>
 }) {
   const [provider, setProvider] = createSignal<ProviderStatus>()
+  const [debug, setDebug] = createSignal("provider=unknown · show=pending")
+  const debugging = createMemo(() => props.options?.debug === true)
+  const providerID = createMemo(() => latestProviderID(props.api, props.sessionID))
   let generation = 0
+  let refreshing = false
+  let refreshQueued = false
+  let disposed = false
 
   const refresh = () => {
+    if (disposed) return
+    if (refreshing) {
+      refreshQueued = true
+      return
+    }
+    refreshing = true
+    refreshQueued = false
     const request = ++generation
-    void currentStatus(props.api, props.options, props.sessionID)
+    const requestedProviderID = providerID()
+    if (debugging() && provider() === undefined) setDebug(`provider=${requestedProviderID ?? "none"} · show=pending`)
+    void currentStatus(props.options, requestedProviderID)
       .then((result) => {
-        if (request === generation) setProvider(result)
+        if (request !== generation) return
+        setProvider(result)
+        if (untrack(debugging)) {
+          setDebug(
+            `provider=${result?.id ?? requestedProviderID ?? "none"} · show=${result !== undefined} · accounts=${result?.accounts.length ?? 0} · active=${result?.active.state ?? "n/a"}`,
+          )
+        }
       })
-      .catch(() => {
-        if (request === generation) setProvider(undefined)
+      .catch((error) => {
+        if (request !== generation) return
+        setProvider(undefined)
+        if (untrack(debugging)) {
+          const message = error instanceof Error ? error.message : String(error)
+          setDebug(`provider=${requestedProviderID ?? "none"} · show=false · error=${message}`)
+        }
+      })
+      .finally(() => {
+        refreshing = false
+        if (refreshQueued) refresh()
       })
   }
 
-  createEffect(() => {
+  onMount(() => {
     refresh()
     const interval = setInterval(refresh, POLL_INTERVAL_MS)
-    const unlistenMessage = props.api.event.on("message.updated", refresh)
-    const unlistenSession = props.api.event.on("session.updated", refresh)
     props.refreshers.add(refresh)
     onCleanup(() => {
+      disposed = true
+      refreshQueued = false
       generation += 1
       clearInterval(interval)
-      unlistenMessage()
-      unlistenSession()
       props.refreshers.delete(refresh)
     })
   })
 
+  // Re-fetch when the active provider changes; `on` reads providerID() untracked
+  // inside the callback so refresh()'s own store reads never retrigger this effect.
+  createEffect(on(providerID, () => refresh(), { defer: true }))
+
   return (
-    <Show when={provider()}>
-      {(value) => (
-        <text fg={props.api.theme.current.textMuted} flexShrink={0}>
-          {text(value())}
-        </text>
-      )}
-    </Show>
+    // OpenTUI drops a slot renderer whose first result is null before async status resolves.
+    <text fg={props.api.theme.current.textMuted} flexShrink={0}>
+      <Show
+        when={debugging()}
+        fallback={
+          <Show when={provider()}>
+            {(value) => {
+              const usage = createMemo(() => usageDetails(value()))
+              const usageColor = createMemo(() => {
+                const theme = props.api.theme.current
+                switch (usage()?.band) {
+                  case "red":
+                    return theme.error
+                  case "orange":
+                    return theme.warning
+                  case "yellow":
+                    return theme.info
+                  default:
+                    return theme.success
+                }
+              })
+              return (
+                <>
+                  <span style={{ fg: props.api.theme.current.text }}>{text(value())}</span>
+                  <Show when={usage()}>
+                    {(details) => (
+                      <>
+                        {" · "}
+                        <span style={{ fg: usageColor() }}>{details().percent}%</span>
+                        <Show when={details().reset}>{(reset) => <> @{reset()}</>}</Show>
+                      </>
+                    )}
+                  </Show>
+                </>
+              )
+            }}
+          </Show>
+        }
+      >
+        <span style={{ fg: props.api.theme.current.warning }}>
+          swap debug · {debug()}
+        </span>
+      </Show>
+    </text>
   )
 }
 
@@ -195,7 +304,7 @@ function showConfirm(
 async function showAccounts(api: TuiPluginApi, options: Record<string, unknown> | undefined, refreshers: Set<() => void>) {
   let summary: Status
   try {
-    summary = await readStatus(api, options)
+    summary = await readStatus(options)
   } catch {
     api.ui.toast({ variant: "error", message: "Unable to read opencode-swap status." })
     return
@@ -237,7 +346,7 @@ async function showNextAccount(api: TuiPluginApi, options: Record<string, unknow
 
   let provider: ProviderStatus | undefined
   try {
-    provider = (await readStatus(api, options)).providers.find((item) => item.id === providerID)
+    provider = (await readStatus(options)).providers.find((item) => item.id === providerID)
   } catch {
     api.ui.toast({ variant: "error", message: "Unable to read opencode-swap status." })
     return

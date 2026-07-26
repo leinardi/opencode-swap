@@ -1,8 +1,6 @@
 import base64
 import stat
 
-import keyring
-import keyring.errors
 import pytest
 
 from opencode_swap import macos_keychain
@@ -14,9 +12,7 @@ SECRET_VALUE = b"secret-value"
 
 
 class FakeBackend:
-    """In-memory stand-in for either the macOS Keychain or python-keyring,
-    with a controllable failure mode and a call counter (for sticky-pin
-    assertions)."""
+    """In-memory macOS Keychain stand-in with failure and call controls."""
 
     def __init__(self, error_cls):
         self.data: dict[tuple[str, str], str] = {}
@@ -49,15 +45,6 @@ def mac_backend(monkeypatch):
     monkeypatch.setattr(macos_keychain, "get_password", fake.get_password)
     monkeypatch.setattr(macos_keychain, "set_password", fake.set_password)
     monkeypatch.setattr(macos_keychain, "delete_password", fake.delete_password)
-    return fake
-
-
-@pytest.fixture
-def linux_backend(monkeypatch):
-    fake = FakeBackend(keyring.errors.KeyringError)
-    monkeypatch.setattr(keyring, "get_password", fake.get_password)
-    monkeypatch.setattr(keyring, "set_password", fake.set_password)
-    monkeypatch.setattr(keyring, "delete_password", fake.delete_password)
     return fake
 
 
@@ -145,24 +132,20 @@ def test_reconcile_deletes_stale_file_after_os_write(tmp_path, mac_backend):
     assert store.get("openai:work") == "new-os-value"
 
 
-def test_linux_backend_roundtrip(tmp_path, linux_backend):
+def test_linux_uses_private_file_backend(tmp_path):
     store = SecretStore(tmp_path, platform=Platform.LINUX)
-    assert store.backend_name == "keyring"
+    assert store.backend_name == "file"
     store.put("openai:work", "secret-value")
     assert store.get("openai:work") == "secret-value"
+    secret_file = next(tmp_path.glob("*.enc"))
+    assert stat.S_IMODE(secret_file.stat().st_mode) == 0o600
+    assert stat.S_IMODE(tmp_path.stat().st_mode) == 0o700
+    assert SECRET_VALUE not in secret_file.read_bytes()
     store.delete("openai:work")
     assert store.get("openai:work") is None
 
 
-def test_linux_fallback_on_keyring_error(tmp_path, linux_backend):
-    store = SecretStore(tmp_path, platform=Platform.LINUX)
-    linux_backend.fail = True
-    store.put("openai:work", "secret-value")
-    assert store.backend_name == "file"
-    assert store.get("openai:work") == "secret-value"
-
-
-def test_linux_delete_missing_is_noop(tmp_path, linux_backend):
+def test_linux_delete_missing_is_noop(tmp_path):
     store = SecretStore(tmp_path, platform=Platform.LINUX)
     store.delete("openai:nonexistent")  # must not raise
 
@@ -271,7 +254,7 @@ def test_missing_secrets_dir_uses_existing_parent_name_limit(tmp_path, monkeypat
     assert store.get(key) is None
 
 
-def test_linux_reconciliation_publishes_v2_when_legacy_cleanup_fails(tmp_path, linux_backend, monkeypatch):
+def test_linux_write_publishes_v2_when_legacy_cleanup_fails(tmp_path, monkeypatch):
     store = SecretStore(tmp_path, platform=Platform.LINUX)
     key = "openai:work"
     legacy_path = store._legacy_file_path(key)

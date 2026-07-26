@@ -8,7 +8,7 @@ implementation plan.
 | M0 — Technical spike | Done | Proved the core premise against a real OpenCode install: swapping `auth.json`'s `"openai"` key is picked up on the next request with no restart. |
 | M1 — Project skeleton | Done | `pyproject.toml`, entrypoints, `paths.py`, `models.py`. |
 | M2 — OpenCode auth discovery | Done | Common schema plus provider-specific auth behavior; OpenAI verified against real `auth.json`. |
-| M3 — Secure account storage | Done | `store.py` (keychain/keyring/file routing, sticky fallback), `macos_keychain.py`, `locking.py`; verified against a real Linux Secret Service keyring. |
+| M3 — Secure account storage | Done | `store.py` (private Linux files, macOS Keychain with sticky file fallback), `macos_keychain.py`, `locking.py`; Linux matches OpenCode's filesystem trust boundary without interactive Secret Service dependencies. |
 | M4 — OpenAI account import | Done | `Switcher.add_account` — identity dedup, refresh-in-place on re-add. |
 | M5 — Safe account switching | Done | `Switcher.use_account` — sync-back, transaction/rollback, full failure-injection test matrix. |
 | M6 — CLI UX | Done | `add`/`list`/`current`/`use`/`remove`/`rename`/`export`/`import`/`doctor`. |

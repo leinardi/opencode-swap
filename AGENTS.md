@@ -12,7 +12,7 @@ reads fresh every request. NOT OpenCode plugin. NOT runtime proxy/interceptor
 `docs/architecture.md`.
 
 Model project: `claude-swap` (same idea, Claude Code). Design choices —
-atomic writes, transaction+rollback, keychain routing w/ sticky file fallback
+atomic writes, transaction+rollback, macOS Keychain routing w/ sticky file fallback
 — ported+adapted here. `docs/architecture.md` + `docs/security.md` note kept
 vs changed, why.
 
@@ -51,15 +51,16 @@ Read these two first — most "obvious" changes wrong without context:
   path overwriting `auth.json` skipping this.
 - **Secrets never touch non-secret registry.** `registry.json` holds only
   name/provider/type/account id/email/timestamp/active hints. Access tokens, refresh
-  tokens, API keys only through `SecretStore` (keychain/keyring/file). About
+  tokens, API keys only through `SecretStore` (macOS Keychain/private file). About
   to put token-shaped string into `registry.py` or `models.AccountMeta`?
   Stop.
 - **No secrets in CLI output, logs, error messages.** `cli.py` truncates
   account ids to last 4 chars, never prints token fields. Anything added to
   CLI output needs same discipline — tests grep stdout/stderr for planted
   secret values.
-- **No custom cryptography.** Security model = OS keychain/keyring first,
-  `chmod 0600` obfuscated files as sticky fallback — matches (not exceeds)
+- **No custom cryptography.** Security model = macOS Keychain first with
+  `chmod 0600` obfuscated files as sticky fallback; Linux always uses those
+  private files — matches (not exceeds)
   OpenCode's own trust boundary. Don't add encryption, key derivation,
   "vault" — see `docs/security.md`, deliberate choice not oversight.
 - **Every mutating `Switcher` op holds `self.lock`.** Serializes
@@ -72,10 +73,10 @@ Read these two first — most "obvious" changes wrong without context:
 
 ## Testing rules
 
-- **Never let test touch real OS keychain/keyring.** Construct
+- **Never let test touch real macOS Keychain.** Construct
   `Switcher`/`SecretStore` w/ `platform=Platform.UNKNOWN` (routes straight
   to file backend) or monkeypatch specific backend functions
-  (`macos_keychain.*`, `keyring.*`) w/ in-memory fake. `tests/test_cli.py`'s
+  (`macos_keychain.*`) w/ in-memory fake. `tests/test_cli.py`'s
   `isolated_env` autouse fixture does this for all CLI tests — reuse
   pattern, don't bypass.
 - **Never let test touch real `~/.local/share/opencode/auth.json`.** Point

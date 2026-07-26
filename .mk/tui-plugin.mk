@@ -16,4 +16,12 @@ tui-plugin-sync: tui-plugin-require-bun ## Install locked OpenCode TUI plugin ty
 tui-plugin-typecheck: tui-plugin-sync ## Typecheck OpenCode TUI plugin
 	$(BUN) run --cwd $(TUI_PLUGIN_DIR) typecheck
 
+.PHONY: tui-plugin-lint
+tui-plugin-lint: tui-plugin-sync ## Lint OpenCode TUI plugin
+	$(BUN) run --cwd $(TUI_PLUGIN_DIR) lint
+
+.PHONY: tui-plugin-package-check
+tui-plugin-package-check: tui-plugin-sync ## Verify OpenCode TUI plugin npm payload
+	$(BUN) run --cwd $(TUI_PLUGIN_DIR) pack:check
+
 endif  # MK_LOCAL_TUI_PLUGIN_INCLUDED

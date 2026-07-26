@@ -5,12 +5,6 @@ description = "Multi-account switcher for OpenCode"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    # Linux only: Secret Service backend for the account secret store.
-    # macOS goes through the pinned `security` CLI instead (see
-    # macos_keychain.py) — same reasoning claude-swap documents: a stable
-    # binary means creator == reader, so an interpreter rebuild doesn't
-    # trigger a "wants to use your keychain" re-prompt.
-    "keyring>=25.0.0; sys_platform == 'linux'",
     # Standard WinZip AES implementation for explicit portable exports.
     # Credential plaintext stays in memory; no home-grown crypto format.
     "pyzipper>=0.4.0",

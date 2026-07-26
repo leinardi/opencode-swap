@@ -53,7 +53,7 @@ the changed paths:
 | --- | --- | --- |
 | auth schema, provider parsing, JWT claims | `docs/opencode-auth.md`, `docs/architecture.md` | exact OpenCode behavior, strict schema validation, provider seam |
 | switching, backups, restore, locking, atomic writes | `docs/architecture.md` | sync-back, transaction boundary, rollback, atomicity, races |
-| secret store, keychain/keyring, permissions | `docs/security.md`, `docs/architecture.md` | backend routing, secret boundary, modes, fallback behavior |
+| secret store, Keychain/files, permissions | `docs/security.md`, `docs/architecture.md` | backend routing, secret boundary, modes, fallback behavior |
 | tests or test infrastructure | `docs/testing.md` | real-resource isolation, failure injection, coverage expectations |
 | CLI commands or user-visible behavior | `README.md` and relevant source docs | command contract, prompts, output secrecy, documented behavior |
 | roadmap or scope claims | `docs/roadmap.md` | intentional omissions versus accidental incompleteness |
@@ -81,8 +81,8 @@ Check these whenever affected, directly or indirectly:
   `registry.json`, `AccountMeta`, CLI output, logs, exception messages, command
   arguments, or generated artifacts. Registry identity must not cache a refresh
   token fallback.
-- **No custom cryptography.** Preserve OS keychain/keyring-first routing and
-  sticky `0600` obfuscated-file fallback. File fallback wins reads and is
+- **No custom cryptography.** Preserve private `0600` Linux files and macOS
+  Keychain-first routing with sticky file fallback. File fallback wins reads and is
   reconciled on writes; do not silently migrate or strand credentials.
 - **Mutations hold `Switcher.lock`.** Every mutating `Switcher` operation must
   hold the lock across its complete transaction. This lock coordinates only

@@ -7,12 +7,12 @@
   command surface is small enough that a framework would be net overhead).
 - **Packaging:** `hatchling` + `uv` (`pyproject.toml`), console scripts
   `opencode-swap` and `ocs`.
-- **Dependencies:** `keyring` on Linux for Secret Service, plus `pyzipper`
-  for password-encrypted portable account archives. macOS goes through a
+- **Dependencies:** `pyzipper` for password-encrypted portable account
+  archives. macOS goes through a
   subprocess wrapper around the system `/usr/bin/security` CLI instead of a
   Python keychain dependency.
 - **Testing:** `pytest`, no other test dependencies. No network access, no
-  real OS keychain/keyring access, no real `auth.json` access required to
+  real OS Keychain access, no real `auth.json` access required to
   run the suite (see `docs/testing.md`).
 
 This mirrors `claude-swap`'s stack choice deliberately (same language,
@@ -27,7 +27,7 @@ this project was modeled on.
 src/opencode_swap/
   cli.py              argparse wiring; formats output; never touches secrets directly
   switcher.py         orchestration: add/use/remove/rename/restore/current, the FileLock scope
-  store.py            SecretStore (keychain/keyring/file routing) + Registry (registry.json)
+  store.py            SecretStore (macOS Keychain/private-file routing) + Registry
   models.py           dataclasses & enums: AccountMeta, AuthRecord, AccountDesc, Validity,
                        SwitchTransaction, Platform, normalize_account_name
   opencode_auth.py     read/atomic-write of OpenCode's auth.json (whole-file, generic)
@@ -112,8 +112,8 @@ $XDG_DATA_HOME/opencode-swap/            (0700)
     auth.json.pristine                   (0600) — first-ever snapshot, written once
     auth.json.restore                    (0600) — temporary restore source; retained if restore fails
     unclaimed-<provider-hash>-<ts>-<suffix>.json (0600) — foreign login preserved instead of overwritten
-  secrets/                               (0700, only created if the file fallback is used)
-    v2-<sha256-key>.enc                  (0600) — base64-obfuscated record, fallback only;
+  secrets/                               (0700, primary on Linux; macOS fallback)
+    v2-<sha256-key>.enc                  (0600) — base64-obfuscated record;
                                           legacy openai_<name>.enc files migrate on write
   .lock                                  — FileLock target
 
@@ -122,9 +122,9 @@ OpenCode's own state (read + atomically rewritten):
 ```
 
 `registry.json` never contains a token. The actual OAuth/API-key record for
-each saved account lives in the OS keychain (macOS) / keyring (Linux) under
-service `opencode-swap`, keyed by `"<provider>:<name>"`, or in the `secrets/`
-fallback files when no keychain/keyring is reachable.
+each saved account lives in the macOS Keychain under service `opencode-swap`,
+keyed by `"<provider>:<name>"`, or in the `secrets/` files on Linux and when
+macOS Keychain is unavailable.
 
 Registry v2 scopes account names and active hints by provider. Migration from
 v1 is atomic and does not move secrets because v1 already used provider-scoped

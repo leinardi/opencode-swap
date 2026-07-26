@@ -7,8 +7,8 @@ make python-test
 
 The equivalent direct command is `uv run pytest -q`.
 
-Automated suite runs in a few seconds. No network access, no real OS
-keychain/keyring access, and no access to your real
+Automated suite runs in a few seconds. No network access, no real macOS
+Keychain access, and no access to your real
 `~/.local/share/opencode/auth.json` is required or performed by the suite.
 
 ## Isolation
@@ -16,7 +16,7 @@ keychain/keyring access, and no access to your real
 Two things must never happen in a test, and the fixtures exist specifically
 to prevent them:
 
-- **Touching the real OS keychain/keyring.** `Switcher`/`SecretStore` accept
+- **Touching the real macOS Keychain.** `Switcher`/`SecretStore` accept
   a `platform` override; passing `platform=Platform.UNKNOWN` routes straight
   to the file backend. CLI tests use an autouse fixture
   (`tests/test_cli.py::isolated_env`) that monkeypatches
@@ -39,8 +39,8 @@ extract/splice/identity/describe/validate for OpenAI and supported provider
 types, generic API metadata validation, guarded OAuth identity behavior, atomic write primitives
 (including permission bits and no-leftover-temp-file assertions), the
 account-name normalization rules, `FileLock` acquire/release/timeout,
-`SecretStore` backend routing (including file-wins-on-read and
-reconcile-on-write), and `Registry` CRUD.
+`SecretStore` backend routing (including Linux private-file permissions and
+macOS fallback reconciliation), and `Registry` CRUD.
 
 **Integration** — the full `add` → `add` (second account) → `use` → `use` →
 `use` round trip, asserting the *exact* resulting `auth.json` content at

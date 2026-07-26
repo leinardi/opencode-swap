@@ -38,10 +38,9 @@ copy-paste OpenCode prompt that gathers safe source evidence for one provider.
 a related but different problem: it's an OpenCode *plugin* that load-balances
 requests across multiple accounts at runtime, and it stores credentials in a
 plaintext SQLite database. `opencode-swap` is a different shape entirely — a
-standalone binary that swaps *which single account* is active, with
-credentials protected by your OS keychain/keyring rather than a plaintext
-file. See [`docs/security.md`](docs/security.md) for the full comparison and
-threat model.
+standalone binary that swaps *which single account* is active, with atomic
+private-file storage on Linux and the system Keychain on macOS. See
+[`docs/security.md`](docs/security.md) for the full comparison and threat model.
 
 ## Install
 
@@ -153,8 +152,8 @@ before writing anything. For existing account names, it offers `skip`,
 `skip-all`, `overwrite`, `overwrite-all`, and `abort`. Identity conflicts under
 different names still abort because there is no unambiguous overwrite target.
 Use the shortcuts `s`, `sa`, `o`, `oa`, and `a`, respectively, at the prompt.
-Imported accounts go through the normal secret backend (macOS Keychain, Linux
-keyring, or file fallback), while the destination's active account and OpenCode
+Imported accounts go through the normal secret backend (macOS Keychain or
+private Linux files), while the destination's active account and OpenCode
 `auth.json` remain unchanged. Delete the transfer archive after successful
 import. Use a strong, unique archive passphrase; archive security depends on
 its entropy. Export refuses if the live credential cannot be proven to match
@@ -166,8 +165,8 @@ The short version: OpenCode keeps all of its provider credentials in a
 single JSON file, `~/.local/share/opencode/auth.json`, and re-reads it fresh
 on every request — no restart required to pick up a change. The entire unit
 of "which account is active" is one top-level provider key in that file.
-`opencode-swap` keeps a copy of each account's record in your OS
-keychain/keyring, and `use <provider> <name>` atomically replaces that one key.
+`opencode-swap` keeps a copy of each account's record in private storage, and
+`use <provider> <name>` atomically replaces that one key.
 
 The interesting part is what happens *between* switches: OpenCode rotates
 the access and refresh token in place whenever it refreshes, so a naively
@@ -194,10 +193,15 @@ Same account name may exist under different providers. `openai:work` and
 OpenCode's `auth.json` exactly.
 
 Upgrading an existing installation automatically migrates registry v1 to
-provider-scoped registry v2 while holding opencode-swap's lock. Existing
-keychain/keyring entries are not rewritten because their keys were already
-`<provider>:<name>`. Original registry is retained as
-`registry.v1.json.bak`; publication of v2 registry is atomic.
+provider-scoped registry v2 while holding opencode-swap's lock. This registry
+migration does not rewrite credential records because their keys were already
+`<provider>:<name>`. Original registry is retained as `registry.v1.json.bak`;
+publication of v2 registry is atomic.
+
+Unreleased Linux checkouts from before the private-file backend change stored
+credentials in Secret Service. Export accounts with that checkout before
+updating, then import them after updating. No published version used that
+backend; routine commands intentionally no longer load or contact it.
 
 Full details, including the exact OpenCode internals this was reverse
 engineered from and the switch algorithm's failure-recovery guarantees, are
@@ -209,11 +213,15 @@ in [`docs/opencode-auth.md`](docs/opencode-auth.md) and
 Credentials are stored via:
 
 - **macOS** — the system Keychain, through the pinned `/usr/bin/security` CLI.
-- **Linux** — the OS keyring (Secret Service / libsecret) via the `keyring`
-  library, when available.
-- **Fallback** (headless Linux, no keyring) — `chmod 0600` files, obfuscated
-  (base64) but not encrypted — the same posture OpenCode's own `auth.json`
-  already has.
+- **Linux** — atomic `chmod 0600` files under a `0700` directory, obfuscated
+  (base64) but not encrypted. This matches OpenCode's filesystem trust boundary
+  without interactive Secret Service unlock prompts. The optional TUI status
+  widget polls account usage, so every secret read must be non-interactive and
+  complete in bounded time. Linux Secret Service cannot guarantee this: an
+  unlocked keyring may prompt again, while a locked or unhealthy D-Bus service
+  can block the CLI indefinitely.
+- **macOS fallback** — the same private-file backend when Keychain is
+  unavailable.
 
 No custom cryptographic protocol. Portable exports use standard WinZip AES-256
 implemented by `pyzipper`; plaintext credentials never touch a temporary file.
@@ -257,7 +265,7 @@ Run `make help` for all development targets. Direct `uv` commands remain
 available when Make is not installed.
 
 See [`docs/testing.md`](docs/testing.md) for what the suite covers and how
-it keeps real OS keychains/keyrings and your real `auth.json` out of the
+it keeps real macOS Keychain data and your real `auth.json` out of the
 loop, and [`AGENTS.md`](AGENTS.md) for conventions to follow when changing
 code here.
 

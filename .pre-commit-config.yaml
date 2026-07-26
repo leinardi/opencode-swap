@@ -25,7 +25,6 @@ repos:
           - rich-argparse
           - types-requests
           - types-setuptools
-          - keyring>=25.0.0
       - id: mypy
         alias: mypy-json-output
         name: mypy (json output)
@@ -119,6 +118,12 @@ repos:
         additional_dependencies: ["prettier@3.7.4"]
         files: \.(yml|yaml)$
         args: ["--write"]
+      - id: tui-plugin-eslint
+        name: tui-plugin eslint
+        entry: make tui-plugin-lint
+        language: system
+        pass_filenames: false
+        files: ^integrations/opencode-tui-plugin/(src/.*\.tsx?|eslint\.config\.ts|package\.json|bun\.lock)$
   - repo: https://github.com/adrienverge/yamllint
     rev: v1.38.0
     hooks:

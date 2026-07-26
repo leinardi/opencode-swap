@@ -22,7 +22,7 @@ class FakeResponse:
 def _payload(**overrides):
     body = {
         "plan_type": "plus",
-        "rate_limit": {"primary_window": {"used_percent": 42, "reset_at": 1785500000}},
+        "rate_limit": {"primary_window": {"used_percent": 42, "reset_at": 1785500000, "limit_window_seconds": 604800}},
     }
     body.update(overrides)
     return json.dumps(body).encode()
@@ -35,6 +35,7 @@ def test_success_extracts_percent_plan_and_reset(monkeypatch):
     assert snap.used_percent == 42
     assert snap.plan_name == "ChatGPT Plus"
     assert snap.reset_at == 1785500000 * 1000  # seconds -> ms
+    assert snap.window_seconds == 604800
 
 
 def test_reset_at_already_in_milliseconds_passed_through(monkeypatch):
@@ -91,11 +92,12 @@ def test_invalid_utf8_returns_unavailable(monkeypatch):
 
 
 def test_nonfinite_or_huge_usage_values_are_rejected(monkeypatch):
-    body = b'{"rate_limit":{"primary_window":{"used_percent":NaN,"reset_at":1e300}}}'
+    body = b'{"rate_limit":{"primary_window":{"used_percent":NaN,"reset_at":1e300,"limit_window_seconds":Infinity}}}'
     monkeypatch.setattr(usage.urllib.request, "urlopen", lambda *a, **k: FakeResponse(body))
     snap = usage.fetch_openai_oauth_usage("access-token", None)
     assert snap.used_percent is None
     assert snap.reset_at is None
+    assert snap.window_seconds is None
     assert cli._format_usage(usage.UsageSnapshot(available=True, used_percent=1, reset_at=float("inf"))) == "  usage: 1%"
     assert usage._reset_at_millis(10**1000) is None
 

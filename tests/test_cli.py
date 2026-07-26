@@ -15,7 +15,7 @@ from tests.helpers import make_jwt
 def isolated_env(tmp_path, monkeypatch):
     """Route paths.py at a throwaway dir and force the file secret backend
     so CLI tests never touch the real OpenCode auth.json or the real OS
-    keychain/keyring."""
+    macOS Keychain."""
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
     monkeypatch.delenv("OPENCODE_AUTH_CONTENT", raising=False)
     monkeypatch.setattr(Platform, "detect", classmethod(lambda cls: Platform.UNKNOWN))
@@ -268,7 +268,13 @@ def test_status_usage_fetches_only_active_managed_account(tmp_path, monkeypatch,
 
     def fetch(*args):
         calls.append(args)
-        return UsageSnapshot(available=True, used_percent=17, plan_name="ChatGPT Plus", reset_at=1_750_000_000_000)
+        return UsageSnapshot(
+            available=True,
+            used_percent=17,
+            plan_name="ChatGPT Plus",
+            reset_at=1_750_000_000_000,
+            window_seconds=604800,
+        )
 
     monkeypatch.setattr("opencode_swap.switcher.usage.fetch_openai_oauth_usage", fetch)
     assert cli.main(["status", "--json", "--usage"]) == 0
@@ -281,6 +287,7 @@ def test_status_usage_fetches_only_active_managed_account(tmp_path, monkeypatch,
         "used_percent": 17,
         "plan_name": "ChatGPT Plus",
         "reset_at": 1_750_000_000_000,
+        "window_seconds": 604800,
     }
 
 

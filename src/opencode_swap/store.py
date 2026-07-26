@@ -1,16 +1,13 @@
 """Secure per-account secret storage, and the non-secret account registry.
 
-SecretStore: keychain/keyring/file routing, with a sticky fallback.
+SecretStore: macOS Keychain or private file routing.
 
 - macOS: ``/usr/bin/security`` CLI (macos_keychain.py) — pinned binary so
   creator == reader across interpreter upgrades (ported from claude-swap).
-- Linux: OS keyring via the ``keyring`` library (Secret Service / libsecret),
-  falling back to 0600 files when no keyring is available (headless hosts,
-  CI, servers). claude-swap has no such fallback on Linux — files only; we
-  add it because plaintext-file-only-by-default is exactly the posture the
-  new tool is meant to improve on (see opencode-balancer's plaintext
-  SQLite).
-- Fallback file backend is obfuscation (base64), not encryption — same as
+- Linux: 0600 files under a 0700 directory, matching OpenCode's own
+  filesystem trust boundary without Secret Service unlock prompts or D-Bus
+  availability requirements.
+- File backend is obfuscation (base64), not encryption — same as
   claude-swap's ``.enc`` files — protected by 0600 file / 0700 dir perms,
   matching (not exceeding) OpenCode's own auth.json trust boundary.
 
@@ -67,52 +64,28 @@ class SecretStore:
     def __init__(self, secrets_dir: Path, platform: Platform | None = None):
         self._dir = secrets_dir
         self._platform = platform or Platform.detect()
-        self._use_file_backend = self._platform not in (Platform.MACOS, Platform.LINUX)
+        self._use_file_backend = self._platform is not Platform.MACOS
         self._backend_errors: tuple[type[BaseException], ...] = ()
         if self._platform is Platform.MACOS:
             self._backend_errors = macos_keychain.KEYCHAIN_ERRORS
-        elif self._platform is Platform.LINUX:
-            import keyring.errors  # noqa: PLC0415
-
-            self._backend_errors = (keyring.errors.KeyringError,)
 
     @property
     def backend_name(self) -> str:
         if self._use_file_backend:
             return "file"
-        return "keychain" if self._platform is Platform.MACOS else "keyring"
+        return "keychain"
 
     def _pin_file_backend(self) -> None:
         self._use_file_backend = True
 
     def _put_os(self, key: str, value: str) -> None:
-        if self._platform is Platform.MACOS:
-            macos_keychain.set_password(SERVICE_NAME, key, value)
-        else:
-            import keyring  # noqa: PLC0415
-
-            keyring.set_password(SERVICE_NAME, key, value)
+        macos_keychain.set_password(SERVICE_NAME, key, value)
 
     def _get_os(self, key: str) -> str | None:
-        if self._platform is Platform.MACOS:
-            return macos_keychain.get_password(SERVICE_NAME, key)
-        import keyring  # noqa: PLC0415
-
-        return keyring.get_password(SERVICE_NAME, key)
+        return macos_keychain.get_password(SERVICE_NAME, key)
 
     def _delete_os(self, key: str) -> None:
-        if self._platform is Platform.MACOS:
-            macos_keychain.delete_password(SERVICE_NAME, key)
-            return
-        import keyring  # noqa: PLC0415
-
-        # keyring's delete_password raises PasswordDeleteError for a
-        # backend that can't confirm absence, ambiguous with "already
-        # absent" — check first so a normal no-op is never misclassified as
-        # a broken backend (which would incorrectly pin the file fallback).
-        if keyring.get_password(SERVICE_NAME, key) is None:
-            return
-        keyring.delete_password(SERVICE_NAME, key)
+        macos_keychain.delete_password(SERVICE_NAME, key)
 
     def _file_path(self, key: str) -> Path:
         return self._dir / _safe_filename(key)
@@ -201,7 +174,7 @@ class SecretStore:
         if file_value is not None:
             return file_value
         if self._use_file_backend:
-            if self._platform in (Platform.MACOS, Platform.LINUX):
+            if self._platform is Platform.MACOS:
                 raise SecretStoreError("cannot confirm credential absence while OS credential store is unavailable")
             return None
         try:
@@ -234,7 +207,7 @@ class SecretStore:
                 raise SecretStoreError("could not confirm deletion from the OS credential store") from exc
             self._delete_file(key)
             return
-        if self._platform in (Platform.MACOS, Platform.LINUX):
+        if self._platform is Platform.MACOS:
             raise SecretStoreError("cannot confirm deletion from the OS credential store while it is unavailable")
         self._delete_file(key)
 

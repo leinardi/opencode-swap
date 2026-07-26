@@ -31,13 +31,18 @@ false security.
 
 | Approach | Linux | macOS | Headless Linux | Dependencies | If unavailable |
 | --- | --- | --- | --- | --- | --- |
-| **OS keychain/keyring** (chosen, primary) | Secret Service via `keyring` | Keychain via `/usr/bin/security` | often absent | `keyring` (Linux only) | falls back to files |
+| **OS keychain** | n/a | Keychain via `/usr/bin/security` | n/a | none | falls back to files |
+| Linux Secret Service | interactive unlocks and D-Bus availability | n/a | often absent | `keyring` | can block indefinitely |
 | Encrypted vault (age/libsodium + passphrase) | possible | possible | works | new crypto dependency + passphrase UX | — |
-| Keychain-held master key + encrypted blobs | possible | possible | needs fallback | crypto + keyring | same problem, one layer deeper |
-| Filesystem-only, `0600` (chosen, fallback) | works everywhere | works everywhere | works | none | n/a — always available |
+| Filesystem-only, `0600` | **chosen** | fallback | **chosen** | none | n/a — always available |
 
-**Chosen for v1: OS keychain/keyring first, `0600` file fallback, no custom
-cryptography.**
+**Chosen for v1: private `0600` files on Linux, macOS Keychain with a sticky
+file fallback, and no custom cryptography.**
+
+Pre-release Linux checkouts briefly used Secret Service. No published version
+used that backend. Those checkouts must export accounts before updating and
+import them afterward; normal commands do not probe legacy keyrings because a
+locked or unhealthy service can prompt interactively or block indefinitely.
 
 - **macOS:** the system `security` CLI, pinned to `/usr/bin/security`
   (not resolved via `PATH`, to prevent an attacker-controlled binary earlier
@@ -50,29 +55,29 @@ cryptography.**
   (`keyring`, or any in-process Security.framework call) ties the item's
   access to the interpreter binary itself, which a tool upgrade can rebuild
   — at which point macOS may show a "wants to use your keychain" prompt.
-- **Linux:** the `keyring` Python library, which talks to the Secret
-  Service D-Bus API (GNOME Keyring, KWallet, etc.) via `secretstorage`.
-  This is genuinely new relative to `claude-swap`, which only supports
-  `0600` files on Linux — `opencode-swap` adds the keyring layer because
-  plaintext-file-only-by-default is exactly the posture this project set
-  out to avoid (see `opencode-balancer`'s plaintext SQLite as the
-  motivating counter-example).
-- **Fallback (either platform, when the above is unreachable — headless
-  servers, containers, no keyring daemon running):** a base64-encoded blob
-  in a `0600` file under a `0700` directory. This is **obfuscation, not
-  encryption** — anyone with read access to the file can decode it. It's
-  the same posture OpenCode's own `auth.json` already has, not a downgrade
-  from it.
-- **Sticky fallback:** once a keychain/keyring operation fails during a
+- **Linux:** a base64-encoded blob in a `0600` file under a `0700` directory.
+  This is **obfuscation, not encryption** — anyone with read access to the file
+  can decode it. OpenCode stores the same credentials as raw JSON in its own
+  `0600` `auth.json`, so this deliberately matches its trust boundary. Secret
+  Service was rejected because `opencode-swap` must make routine reads without
+  prompts: `list`, switching identity checks, and optional TUI status polling
+  all load stored credentials. Secret Service may ask the user to unlock a
+  keyring on any of those reads; a locked or unhealthy D-Bus service can block
+  the CLI indefinitely instead of returning an error for file fallback. A
+  keyring is therefore incompatible with a background status widget, not an
+  improvement over OpenCode's own private-file security model.
+- **macOS fallback:** the same private-file backend when Keychain is
+  unavailable.
+- **Sticky fallback:** once a macOS Keychain operation fails during a
   process, that `SecretStore` instance pins itself to the file backend for
   the rest of its life — it never flip-flops between backends mid-operation
   even if the backend "recovers" partway through. Account deletion then
   refuses rather than claiming an unreachable OS copy was removed.
   (`store.py`)
-- **File-wins-on-read, reconcile-on-write:** if a fallback file exists for
+- **File-wins-on-read, reconcile-on-write (macOS):** if a fallback file exists for
   an account, it's treated as authoritative on read (it may be fresher than
   a stale/unreachable keychain copy from a prior fallback episode); a
-  successful keychain/keyring write deletes any stale fallback file for
+  successful Keychain write deletes any stale fallback file for
   that account afterward. Both ported directly from `claude-swap`'s
   `credentials.py`.
 
@@ -98,7 +103,7 @@ a strong, unique passphrase; archive security depends on its entropy.
 | --- | --- | --- |
 | Provider-scoped account name, type, account id, email, added timestamp, active hint | `registry.json` (`0600`) | No — never a token |
 | Original registry before automatic v1-to-v2 migration | `registry.v1.json.bak` (`0600`) | No — never a token |
-| Access token, refresh token, API key | OS keychain/keyring, or `secrets/*.enc` fallback (`0600`) | Yes |
+| Access token, refresh token, API key | Linux `secrets/*.enc` (`0600`), or macOS Keychain/file fallback | Yes |
 | Pre-switch/pristine/unclaimed `auth.json` snapshots | `backups/*.json` (`0600`, dir `0700`) | Yes — full credential records |
 | Explicit portable account export | User-selected path (`0600`, AES-256 encrypted) | Yes — delete after import |
 | `opencode-swap`'s own lock file | `.lock` (empty, no data) | No |
@@ -114,10 +119,9 @@ of guessing ownership.
 
 ## Process hygiene
 
-- No secret is ever passed as a command-line argument (visible via `ps`) —
-  the macOS Keychain wrapper passes secrets over stdin specifically to
-  avoid this; the Linux `keyring` library's API doesn't take secrets as
-  subprocess arguments in the first place.
+- No secret is ever passed as a command-line argument (visible via `ps`). The
+  macOS Keychain wrapper passes secrets over stdin specifically to avoid this;
+  Linux writes them directly through the atomic file primitive.
 - CLI output never includes an access token, refresh token, or API key.
   Account ids are shown truncated to their last 4 characters, even though
   an account id alone isn't secret — matching the stated output policy.

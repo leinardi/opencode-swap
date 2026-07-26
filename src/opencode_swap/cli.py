@@ -227,15 +227,24 @@ def _status_usage(snapshot: UsageSnapshot | None) -> dict[str, object]:
                 and math.isfinite(snapshot.used_percent)
             )
             valid_reset = isinstance(snapshot.reset_at, (int, float)) and not isinstance(snapshot.reset_at, bool) and math.isfinite(snapshot.reset_at)
+            valid_window = (
+                isinstance(snapshot.window_seconds, (int, float))
+                and not isinstance(snapshot.window_seconds, bool)
+                and math.isfinite(snapshot.window_seconds)
+                and snapshot.window_seconds > 0
+            )
         except OverflowError:
             valid_percent = False
             valid_reset = False
+            valid_window = False
         if valid_percent:
             result["used_percent"] = snapshot.used_percent
         if snapshot.plan_name:
             result["plan_name"] = snapshot.plan_name
         if valid_reset:
             result["reset_at"] = snapshot.reset_at
+        if valid_window:
+            result["window_seconds"] = snapshot.window_seconds
     return result
 
 
