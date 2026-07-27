@@ -4,9 +4,15 @@
   "compilerOptions": {
     "jsx": "preserve",
     "jsxImportSource": "@opentui/solid",
-    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "lib": [
+      "ESNext",
+      "DOM",
+      "DOM.Iterable"
+    ],
     "noEmit": true,
     "noUncheckedIndexedAccess": false
   },
-  "include": ["src"]
+  "include": [
+    "src"
+  ]
 }

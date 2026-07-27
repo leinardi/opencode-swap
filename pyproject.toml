@@ -9,8 +9,8 @@ dependencies = [
     # Credential plaintext stays in memory; no home-grown crypto format.
     "pyzipper>=0.4.0",
 ]
-authors = [{name = "roberto@leinardi.com"}]
-license = {text = "MIT"}
+authors = [{ name = "roberto@leinardi.com" }]
+license = { text = "MIT" }
 keywords = ["opencode", "account-switcher", "cli"]
 classifiers = [
     "Development Status :: 3 - Alpha",

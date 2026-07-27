@@ -21,7 +21,9 @@ Add this path to global `~/.config/opencode/tui.json`:
 ```json
 {
   "$schema": "https://opencode.ai/tui.json",
-  "plugin": ["/absolute/path/to/opencode-swap/integrations/opencode-tui-plugin/src/tui.tsx"]
+  "plugin": [
+    "/absolute/path/to/opencode-swap/integrations/opencode-tui-plugin/src/tui.tsx"
+  ]
 }
 ```
 
@@ -44,7 +46,10 @@ by `uv`, the executable is normally `.venv/bin/opencode-swap`:
   "plugin": [
     [
       "/absolute/path/to/opencode-swap/integrations/opencode-tui-plugin/src/tui.tsx",
-      { "command": "/absolute/path/to/opencode-swap/.venv/bin/opencode-swap", "usage": false }
+      {
+        "command": "/absolute/path/to/opencode-swap/.venv/bin/opencode-swap",
+        "usage": false
+      }
     ]
   ]
 }

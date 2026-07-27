@@ -7,10 +7,10 @@ publish package until Python CLI installation path is documented and tested.
 
 1. Reserve npm scope `@leinardi` and confirm `@leinardi/opencode-swap` name.
 2. In npm package settings, configure trusted publisher:
-   - Provider: GitHub Actions
-   - Organization: `leinardi`
-   - Repository: `opencode-swap`
-   - Workflow: `publish-tui-plugin.yml`
+    - Provider: GitHub Actions
+    - Organization: `leinardi`
+    - Repository: `opencode-swap`
+    - Workflow: `publish-tui-plugin.yml`
 3. Run `make verify` with Bun 1.3.14.
 4. Review `npm pack --dry-run` output from
    `make tui-plugin-package-check`.
