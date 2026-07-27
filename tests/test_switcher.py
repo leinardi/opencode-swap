@@ -327,6 +327,36 @@ def test_rename_account_moves_secret(switcher):
     assert switcher.registry.get_active() == "account@example.test"
 
 
+def test_rename_large_oauth_record_stays_on_keychain_backend(tmp_path, monkeypatch):
+    """Reported regression: a real OpenAI OAuth record (~2KB) hex-encodes to
+    well over `security -i`'s ~4095-char stdin limit. Before the v3
+    envelope, `put()` treated that size rejection as a Keychain outage,
+    pinned the file backend, and `rename`'s cleanup delete then refused
+    with 'cannot confirm deletion from the OS credential store while it is
+    unavailable' even though the Keychain was healthy throughout."""
+    credentials: dict[tuple[str, str], str] = {}
+    monkeypatch.setattr(macos_keychain, "get_password", lambda service, key: credentials.get((service, key)))
+    monkeypatch.setattr(macos_keychain, "set_password", lambda service, key, value: credentials.__setitem__((service, key), value))
+    monkeypatch.setattr(macos_keychain, "delete_password", lambda service, key: credentials.pop((service, key), None))
+    switcher = Switcher(tmp_path / "opencode" / "auth.json", tmp_path / "opencode-swap", platform=Platform.MACOS)
+
+    large_access = make_jwt({"chatgpt_account_id": "acct-a", "padding": "x" * 3000})
+    write_auth(switcher.opencode_auth_path, oauth_entry(account_id="acct-a", access=large_access))
+    switcher.add_account("antonio48@gmail.com")
+
+    assert switcher.secrets.backend_name == "keychain"
+    for value in credentials.values():
+        assert len(value) < 100  # a data key, never the >2KB credential itself
+
+    switcher.rename_account("antonio48@gmail.com", "work")
+
+    assert switcher.secrets.backend_name == "keychain"  # never fell back
+    assert "antonio48@gmail.com" not in switcher.registry.accounts()
+    assert "work" in switcher.registry.accounts()
+    stored = json.loads(switcher.secrets.get("openai:work"))
+    assert stored["accountId"] == "acct-a"
+
+
 def test_rename_keeps_old_secret_when_registry_write_fails(switcher, monkeypatch):
     write_auth(switcher.opencode_auth_path, oauth_entry(account_id="acct-1"))
     switcher.add_account("work")

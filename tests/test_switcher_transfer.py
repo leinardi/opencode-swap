@@ -242,8 +242,19 @@ def test_import_routes_credentials_to_macos_keychain(source, tmp_path, monkeypat
 
     destination.import_accounts(archive, "password")
 
-    assert json.loads(credentials[("opencode-swap", "openai:work")])["accountId"] == "acct-a"
-    assert not (destination.data_root / "secrets").exists()
+    # The Keychain item holds the v3 data key -- a short, fixed-size value,
+    # never the credential itself.
+    assert len(credentials[("opencode-swap", "openai:work")]) < 100
+    stored = json.loads(destination.secrets.get("openai:work"))
+    assert stored["accountId"] == "acct-a"
+    # The credential ciphertext does live in a file (that's the point of
+    # the envelope: `security -i` can't carry it directly) -- but the file
+    # alone, without the Keychain-held data key, is not decryptable.
+    account_id_marker = b"acct-a"
+    secrets_dir = destination.data_root / "secrets"
+    assert secrets_dir.exists()
+    for enc_file in secrets_dir.glob("*.enc"):
+        assert account_id_marker not in enc_file.read_bytes()
 
 
 def test_import_derives_registry_metadata_instead_of_trusting_archive(tmp_path):

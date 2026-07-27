@@ -2,22 +2,39 @@
 
 SecretStore: macOS Keychain or private file routing.
 
-- macOS: ``/usr/bin/security`` CLI (macos_keychain.py) — pinned binary so
-  creator == reader across interpreter upgrades (ported from claude-swap).
+- macOS: an *envelope* scheme (sealed.py). A 32-byte AES-256-GCM data key
+  lives in the Keychain (via ``/usr/bin/security`` — macos_keychain.py,
+  pinned binary so creator == reader across interpreter upgrades, ported
+  from claude-swap); the credential itself is ciphertext in a v3 file
+  under 0600/0700. This exists because ``security -i``'s stdin transport
+  truncates at ~4095 chars (see macos_keychain.py) and a hex-encoded
+  OpenAI OAuth record is well over that — the data key is a fixed 64 hex
+  chars regardless of credential size, so it always fits.
 - Linux: 0600 files under a 0700 directory, matching OpenCode's own
   filesystem trust boundary without Secret Service unlock prompts or D-Bus
-  availability requirements.
-- File backend is obfuscation (base64), not encryption — same as
-  claude-swap's ``.enc`` files — protected by 0600 file / 0700 dir perms,
-  matching (not exceeding) OpenCode's own auth.json trust boundary.
+  availability requirements. Plain base64 (v2 format below), same as
+  macOS's genuine-outage fallback.
+- v2 file backend (both the Linux path and the macOS outage fallback) is
+  obfuscation (base64), not encryption — same as claude-swap's ``.enc``
+  files — protected by 0600 file / 0700 dir perms, matching (not
+  exceeding) OpenCode's own auth.json trust boundary. A small pre-v3
+  credential (e.g. an API key short enough for ``security -i``) may also
+  still be a bare value directly in a Keychain item with no file at all;
+  reads fall back that far as a last resort.
 
-Read/write ordering, ported from claude-swap's credentials.py:
+Read/write ordering, ported from claude-swap's credentials.py and
+extended for the v3 envelope format:
 
-- **File-wins-on-read**: if a fallback file exists for a key, it is
+- **v3-wins-on-read**: on macOS, a sealed v3 file for a key is always
+  authoritative over any v2/legacy file — unlike v2, whose presence merely
+  means "possibly fresher than the OS backend," a v3 file's Keychain data
+  key is the only thing that can ever decrypt it, so it cannot go stale
+  the way a plain fallback copy can.
+- **File-wins-on-read** (v2/legacy, no v3 present): a fallback file is
   authoritative — it may be fresher than a stale or currently-unreachable
   OS-backend copy (written during a prior fallback episode).
-- **Reconcile-on-write**: after a successful OS-backend write, any stale
-  fallback file for that key is deleted.
+- **Reconcile-on-write**: after a successful v3 (or, off macOS, v2) write,
+  any stale older-format file for that key is deleted, best-effort.
 - **Sticky fallback**: once an OS-backend operation fails during this
   process, this SecretStore instance pins itself to the file backend for
   the rest of its life — a single CLI invocation never flip-flops between
@@ -31,6 +48,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import enum
 import hashlib
 import json
 import os
@@ -38,7 +56,7 @@ import stat
 from contextlib import suppress
 from pathlib import Path
 
-from opencode_swap import macos_keychain
+from opencode_swap import macos_keychain, sealed
 from opencode_swap.atomic import atomic_write_bytes, atomic_write_json, atomic_write_json_exclusive
 from opencode_swap.exceptions import RegistryError, SecretStoreError
 from opencode_swap.models import AccountKey, AccountMeta, JsonObject, Platform, normalize_account_name, normalize_provider_id
@@ -50,8 +68,20 @@ _LEGACY_KEY_PREFIX = "openai:"
 _FALLBACK_NAME_MAX = 255
 
 
+class RecordLocation(enum.Enum):
+    """Where a key's credential currently lives, for `doctor` reporting."""
+
+    SEALED = "sealed"  # v3 envelope, or a small pre-v3 value straight in the Keychain
+    FILE_FALLBACK = "file_fallback"  # v2/legacy: recoverable base64 on disk
+    MISSING = "missing"
+
+
 def _safe_filename(key: str) -> str:
     return f"v2-{hashlib.sha256(key.encode('utf-8')).hexdigest()}.enc"
+
+
+def _sealed_filename(key: str) -> str:
+    return f"v3-{hashlib.sha256(key.encode('utf-8')).hexdigest()}.enc"
 
 
 def _legacy_filename(key: str) -> str:
@@ -89,6 +119,9 @@ class SecretStore:
 
     def _file_path(self, key: str) -> Path:
         return self._dir / _safe_filename(key)
+
+    def _sealed_file_path(self, key: str) -> Path:
+        return self._dir / _sealed_filename(key)
 
     def _legacy_file_path(self, key: str) -> Path:
         return self._dir / _legacy_filename(key)
@@ -152,11 +185,67 @@ class SecretStore:
             raise SecretStoreError("stored file credential is corrupt") from exc
 
     def _delete_file(self, key: str) -> None:
+        self._sealed_file_path(key).unlink(missing_ok=True)
         self._file_path(key).unlink(missing_ok=True)
         if self._has_legacy_fallback(key):
             self._legacy_file_path(key).unlink(missing_ok=True)
 
+    def _get_sealed(self, key: str) -> str | None:
+        """Read+decrypt the v3 record for `key`. None if there is no v3
+        file for it (an older-format file or a direct Keychain value may
+        still exist — callers fall back to those). `self._backend_errors`
+        propagate for a genuine Keychain outage; SecretStoreError for a
+        corrupt or tampered blob."""
+        try:
+            blob = self._sealed_file_path(key).read_bytes()
+        except FileNotFoundError:
+            return None
+        except OSError as exc:
+            raise SecretStoreError("could not read stored file credential") from exc
+        data_key_hex = self._get_os(key)
+        if data_key_hex is None:
+            # Orphaned: the file survived a crash but its data key never
+            # committed, or the key was deleted independently. Unreadable
+            # either way -- GC it and let an older-format fallback win.
+            with suppress(OSError):
+                self._sealed_file_path(key).unlink(missing_ok=True)
+            return None
+        return sealed.unseal(key, data_key_hex, blob)
+
+    def _put_sealed(self, key: str, value: str) -> None:
+        """Encrypt `value` under `key`'s existing Keychain data key, or a
+        freshly minted one if this is the first write for `key`. Reusing
+        the existing key on update (rather than rotating per write) keeps
+        every update to a single atomic file write -- exactly the crash
+        atomicity `atomic_write_bytes` already gives v2 -- instead of two
+        independent writes (Keychain + file) that could tear on a crash.
+        GCM's security only needs a fresh nonce per encryption under a
+        reused key, which `sealed.seal` already generates every call."""
+        existing_key = self._get_os(key) if self._sealed_file_path(key).exists() else None
+        data_key_hex = existing_key if existing_key is not None else sealed.new_data_key()
+        blob = sealed.seal(key, data_key_hex, value)
+        if existing_key is None:
+            self._put_os(key, data_key_hex)
+        self._dir.mkdir(parents=True, exist_ok=True)
+        self._dir.chmod(0o700)
+        atomic_write_bytes(self._sealed_file_path(key), blob, mode=0o600)
+        # v3 always wins subsequent reads, so cleaning up a stale
+        # older-format copy is pure best-effort -- unlike the old v2
+        # reconcile, there's no need to republish a fallback if this fails.
+        with suppress(OSError):
+            self._file_path(key).unlink(missing_ok=True)
+            if self._has_legacy_fallback(key):
+                self._legacy_file_path(key).unlink(missing_ok=True)
+
     def get(self, key: str) -> str | None:
+        if not self._use_file_backend:
+            try:
+                sealed_value = self._get_sealed(key)
+            except self._backend_errors:
+                self._pin_file_backend()
+                return None
+            if sealed_value is not None:
+                return sealed_value
         file_value = self._get_file(key)
         if file_value is not None:
             return file_value
@@ -170,6 +259,14 @@ class SecretStore:
 
     def get_confirmed(self, key: str) -> str | None:
         """Read `key`, refusing to report absence when OS state is unavailable."""
+        if not self._use_file_backend:
+            try:
+                sealed_value = self._get_sealed(key)
+            except self._backend_errors as exc:
+                self._pin_file_backend()
+                raise SecretStoreError("could not confirm credential absence from OS credential store") from exc
+            if sealed_value is not None:
+                return sealed_value
         file_value = self._get_file(key)
         if file_value is not None:
             return file_value
@@ -184,15 +281,12 @@ class SecretStore:
             raise SecretStoreError("could not confirm credential absence from OS credential store") from exc
 
     def put(self, key: str, value: str) -> None:
+        # _use_file_backend starts False only on macOS (see __init__), so
+        # this branch is always the sealed envelope path -- there is no
+        # other OS-backend implementation to route to.
         if not self._use_file_backend:
             try:
-                self._put_os(key, value)
-                try:
-                    self._delete_file(key)  # reconcile: drop any stale fallback copy
-                except OSError:
-                    # OS write committed. Publish v2 fallback so a stale
-                    # legacy file cannot win subsequent reads.
-                    self._put_file(key, value)
+                self._put_sealed(key, value)
                 return
             except self._backend_errors:
                 self._pin_file_backend()
@@ -216,6 +310,39 @@ class SecretStore:
             self._delete_file(key)
         except OSError as exc:
             raise SecretStoreError("could not delete stored file credential") from exc
+
+    def upgrade(self, key: str) -> None:
+        """Best-effort: reseal `key` into the v3 envelope format if it is
+        still stored as an older-format (v2/legacy) file or a bare pre-v3
+        Keychain value. No-op if already v3, absent, or the OS backend is
+        pinned to the file fallback. Callers must hold whatever lock
+        serializes concurrent access to `key` (Switcher.lock) -- running
+        this for the same key from two processes at once could interleave
+        two different data keys with the wrong ciphertext file."""
+        if self._platform is not Platform.MACOS or self._use_file_backend or self._sealed_file_path(key).exists():
+            return
+        value = self.get(key)
+        if value is not None:
+            self.put(key, value)
+
+    def record_location(self, key: str) -> RecordLocation:
+        """Read-only classification of how `key` is currently stored, for
+        `doctor`. Never raises or mutates state; a Keychain outage just
+        falls back to what's visible on disk alone."""
+        if self._platform is Platform.MACOS:
+            if self._sealed_file_path(key).exists():
+                return RecordLocation.SEALED
+            if not self._use_file_backend:
+                try:
+                    if self._get_os(key) is not None:
+                        return RecordLocation.SEALED
+                except self._backend_errors:
+                    pass
+        if self._file_path(key).exists():
+            return RecordLocation.FILE_FALLBACK
+        if self._has_legacy_fallback(key) and self._legacy_file_path(key).exists():
+            return RecordLocation.FILE_FALLBACK
+        return RecordLocation.MISSING
 
 
 class Registry:

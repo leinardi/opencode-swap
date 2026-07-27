@@ -6,7 +6,7 @@ import pytest
 from opencode_swap import macos_keychain
 from opencode_swap.exceptions import SecretStoreError
 from opencode_swap.models import Platform
-from opencode_swap.store import SecretStore
+from opencode_swap.store import RecordLocation, SecretStore
 
 SECRET_VALUE = b"secret-value"
 
@@ -94,7 +94,14 @@ def test_delete_os_failure_keeps_credential_and_surfaces_error(tmp_path, mac_bac
     with pytest.raises(SecretStoreError, match="could not confirm"):
         store.delete("openai:work")
 
-    assert mac_backend.data[("opencode-swap", "openai:work")] == "secret-value"
+    # The Keychain item now holds the v3 data key, not the raw credential.
+    # This instance is sticky-pinned to the file backend after the failure
+    # (see test_sticky_pin_never_retries_os_backend) and won't touch the
+    # Keychain again itself, but nothing was destroyed: a fresh SecretStore
+    # -- e.g. the next CLI invocation -- can still recover the record.
+    mac_backend.fail = False
+    fresh_store = SecretStore(tmp_path, platform=Platform.MACOS)
+    assert fresh_store.get("openai:work") == "secret-value"
 
 
 def test_confirmed_get_refuses_absence_when_os_backend_fails(tmp_path, mac_backend):
@@ -288,3 +295,136 @@ def test_linux_write_publishes_v2_when_legacy_cleanup_fails(tmp_path, monkeypatc
     assert legacy_path.exists()
     assert store._file_path(key).exists()
     assert store.get(key) == "fresh-secret"
+
+
+# --- v3 envelope (macOS) ---------------------------------------------------
+
+
+def test_macos_large_value_stays_on_keychain_backend(tmp_path, mac_backend):
+    """The original bug report: a >2KB OAuth record (way over `security
+    -i`'s ~4095-char stdin limit) must not spuriously fall back to the
+    file backend -- the envelope's Keychain value is a fixed-size data
+    key, independent of credential size."""
+    store = SecretStore(tmp_path, platform=Platform.MACOS)
+    large_value = '{"padding": "' + "x" * 3000 + '"}'
+
+    store.put("openai:work", large_value)
+
+    assert store.backend_name == "keychain"
+    assert store.get("openai:work") == large_value
+    keychain_value = mac_backend.data[("opencode-swap", "openai:work")]
+    assert len(keychain_value) < 100  # the data key, not the credential
+
+
+def test_macos_sealed_file_never_contains_plaintext(tmp_path, mac_backend):
+    store = SecretStore(tmp_path, platform=Platform.MACOS)
+    secret = "super-secret-oauth-token-value"
+    store.put("openai:work", secret)
+
+    blob = store._sealed_file_path("openai:work").read_bytes()
+    assert secret.encode("utf-8") not in blob
+
+
+def test_macos_aad_binding_rejects_swapped_account_blob(tmp_path, mac_backend):
+    """A v3 blob is bound to its own key_id via AAD, so copying it onto a
+    different account's filename must fail to decrypt rather than
+    silently reading as that other account's credential."""
+    store = SecretStore(tmp_path, platform=Platform.MACOS)
+    store.put("openai:work", "work-secret")
+    store.put("openai:personal", "personal-secret")
+
+    work_path = store._sealed_file_path("openai:work")
+    personal_path = store._sealed_file_path("openai:personal")
+    work_path.write_bytes(personal_path.read_bytes())  # swap in personal's blob
+
+    with pytest.raises(SecretStoreError):
+        store.get("openai:work")
+
+
+def test_macos_orphaned_sealed_file_without_key_is_garbage_collected(tmp_path, mac_backend):
+    store = SecretStore(tmp_path, platform=Platform.MACOS)
+    store.put("openai:work", "secret-value")
+    mac_backend.data.pop(("opencode-swap", "openai:work"))  # simulate a crash-orphaned file
+
+    assert store.get("openai:work") is None
+    assert not store._sealed_file_path("openai:work").exists()
+
+
+def test_macos_delete_removes_key_before_file_leaves_blob_undecryptable(tmp_path, mac_backend, monkeypatch):
+    store = SecretStore(tmp_path, platform=Platform.MACOS)
+    store.put("openai:work", "secret-value")
+
+    original_unlink = type(store._sealed_file_path("openai:work")).unlink
+
+    def fail_unlink(path, *args, **kwargs):
+        if path == store._sealed_file_path("openai:work"):
+            raise OSError("simulated unlink failure")
+        return original_unlink(path, *args, **kwargs)
+
+    unlink_type = type(store._sealed_file_path("openai:work"))
+    monkeypatch.setattr(unlink_type, "unlink", fail_unlink)
+    with pytest.raises(SecretStoreError):
+        store.delete("openai:work")
+
+    # The Keychain key is gone even though the file survived -- the blob
+    # is cryptographically dead, not recoverable plaintext left behind.
+    assert ("opencode-swap", "openai:work") not in mac_backend.data
+    assert store._sealed_file_path("openai:work").exists()
+    # Restore only the unlink patch -- monkeypatch.undo() would also
+    # revert the shared `mac_backend` fixture's Keychain patches.
+    monkeypatch.setattr(unlink_type, "unlink", original_unlink)
+    assert store.get("openai:work") is None
+
+
+def test_macos_update_reuses_existing_data_key(tmp_path, mac_backend):
+    """An update must not rotate the Keychain data key -- otherwise a
+    crash between the Keychain write and the file write could leave a
+    file encrypted under a key that no longer matches what's stored."""
+    store = SecretStore(tmp_path, platform=Platform.MACOS)
+    store.put("openai:work", "v1")
+    first_key = mac_backend.data[("opencode-swap", "openai:work")]
+    calls_before = mac_backend.calls
+
+    store.put("openai:work", "v2")
+
+    assert mac_backend.data[("opencode-swap", "openai:work")] == first_key
+    assert mac_backend.calls == calls_before + 1  # one read, no rewrite
+    assert store.get("openai:work") == "v2"
+
+
+def test_upgrade_reseals_v2_file_into_v3_and_removes_it(tmp_path, mac_backend):
+    store = SecretStore(tmp_path, platform=Platform.MACOS)
+    store._put_file("openai:work", "legacy-secret")  # simulate a pre-existing v2 record
+
+    store.upgrade("openai:work")
+
+    assert store._sealed_file_path("openai:work").exists()
+    assert not store._file_path("openai:work").exists()
+    assert store.get("openai:work") == "legacy-secret"
+
+
+def test_upgrade_is_noop_when_already_sealed(tmp_path, mac_backend):
+    store = SecretStore(tmp_path, platform=Platform.MACOS)
+    store.put("openai:work", "secret-value")
+    calls_before = mac_backend.calls
+
+    store.upgrade("openai:work")
+
+    assert mac_backend.calls == calls_before
+    assert store.get("openai:work") == "secret-value"
+
+
+def test_upgrade_is_noop_when_absent(tmp_path, mac_backend):
+    store = SecretStore(tmp_path, platform=Platform.MACOS)
+    store.upgrade("openai:nonexistent")  # must not raise
+    assert store.get("openai:nonexistent") is None
+
+
+def test_record_location_reports_sealed_fallback_and_missing(tmp_path, mac_backend):
+    store = SecretStore(tmp_path, platform=Platform.MACOS)
+    store.put("openai:sealed", "value")
+    store._put_file("openai:legacy", "value")
+
+    assert store.record_location("openai:sealed") is RecordLocation.SEALED
+    assert store.record_location("openai:legacy") is RecordLocation.FILE_FALLBACK
+    assert store.record_location("openai:missing") is RecordLocation.MISSING

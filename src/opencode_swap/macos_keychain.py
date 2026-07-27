@@ -13,9 +13,16 @@ third-party ``keyring`` library:
 
  - ``set_password`` hex-encodes the value (``-X``) and pipes the command
    through ``security -i`` (stdin) so the secret never appears in process
-   argv (a process-monitor concern). Values too large for ``security -i``'s
-   4096-byte stdin line buffer fail closed; SecretStore then uses its file
-   fallback rather than exposing a credential in argv.
+   argv (a process-monitor concern). Measured on-device: ``security -i``
+   truncates a stdin line at 4095 characters regardless of how much more
+   follows (probed with 5K/10K/20K-byte inputs — all truncate identically;
+   no line continuation exists for quoted args or a trailing backslash). A
+   command over this limit fails closed rather than silently truncating a
+   credential. Because this makes any raw credential over ~2000 bytes
+   unroutable through ``security -i`` (hex-encoding doubles it), callers
+   must not depend on this backend alone for values that size or larger —
+   see sealed.py's envelope format, which keeps every Keychain value to a
+   fixed 64 hex chars regardless of credential size.
 - ``get_password`` uses ``find-generic-password ... -w`` and treats exit
   code 44 as "not found" (returns ``None``); any *other* non-zero exit
   raises so callers can tell a genuine miss apart from a locked/denied/
@@ -33,10 +40,12 @@ from __future__ import annotations
 
 import subprocess
 
-# ``security -i`` reads stdin with a 4096-byte fgets() buffer (BUFSIZ on
-# darwin). A command line longer than this is truncated mid-argument: it
-# fails to write while leaving any previous entry intact. 64 bytes of
-# headroom guards against line-terminator accounting differences.
+# ``security -i`` reads stdin with a 4096-byte fgets() buffer and truncates
+# any longer line, with no continuation across lines. Measured directly
+# (5K/10K/20K-byte probe inputs all truncate at the same 4095-char point;
+# BUFSIZ itself is 1024 on darwin, so this is the tool's own internal
+# buffer, not libc's). 64 bytes of headroom guards against line-terminator
+# accounting differences.
 SECURITY_STDIN_LINE_LIMIT = 4096 - 64
 
 _NOT_FOUND_RC = 44  # errSecItemNotFound surfaced by find/delete-generic-password

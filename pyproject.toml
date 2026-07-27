@@ -8,6 +8,10 @@ dependencies = [
     # Standard WinZip AES implementation for explicit portable exports.
     # Credential plaintext stays in memory; no home-grown crypto format.
     "pyzipper>=0.4.0",
+    # AES-256-GCM for the macOS Keychain envelope format (sealed.py).
+    # Already a transitive dependency of pyzipper; declared directly here
+    # because sealed.py imports it independently of transfer.py.
+    "pycryptodomex>=3.19.0",
 ]
 authors = [{ name = "roberto@leinardi.com" }]
 license = { text = "MIT" }

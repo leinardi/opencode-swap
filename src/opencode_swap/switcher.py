@@ -94,6 +94,16 @@ class Switcher:
     def _provider(provider_id: str) -> Provider:
         return get_provider(normalize_provider_id(provider_id))
 
+    def _sweep_secret_upgrades(self) -> None:
+        """Best-effort: reseal any account still on an older secret-store
+        format into the current v3 envelope (SecretStore.upgrade). Called
+        under `self.lock` at the start of every mutating operation so a
+        record that isn't otherwise rewritten by the operation itself
+        still gets upgraded, without two concurrent invocations racing to
+        upgrade the same key."""
+        for provider_id, name in self.registry.scoped_accounts():
+            self.secrets.upgrade(_secret_key(provider_id, name))
+
     def _load_record(self, provider_id: str, name: str, *, confirmed: bool = False) -> AuthRecord | None:
         key = _secret_key(provider_id, name)
         stored = self.secrets.get_confirmed(key) if confirmed else self.secrets.get(key)
@@ -145,6 +155,7 @@ class Switcher:
         provider = self._provider(provider_id)
 
         with self.lock:
+            self._sweep_secret_upgrades()
             try:
                 record = self._read_live_record(provider_id)
             except AuthFileError as exc:
@@ -248,6 +259,7 @@ class Switcher:
             raise OpenCodeSwapError("account archive contains no accounts")
 
         with self.lock:
+            self._sweep_secret_upgrades()
             validated: list[tuple[transfer.TransferEntry, Provider, AuthRecord]] = []
             for entry in entries:
                 try:
@@ -379,6 +391,7 @@ class Switcher:
         provider_id = normalize_provider_id(provider_id)
         name = normalize_account_name(name)
         with self.lock:
+            self._sweep_secret_upgrades()
             target_meta = self.registry.scoped_accounts().get((provider_id, name))
             if target_meta is None:
                 raise OpenCodeSwapError(f"no such account: {name}")
@@ -459,6 +472,7 @@ class Switcher:
         provider_id = normalize_provider_id(provider_id)
         name = normalize_account_name(name)
         with self.lock:
+            self._sweep_secret_upgrades()
             meta = self.registry.scoped_accounts().get((provider_id, name))
             if meta is None:
                 raise OpenCodeSwapError(f"no such account: {name}")
@@ -483,6 +497,7 @@ class Switcher:
         old = normalize_account_name(old)
         new = normalize_account_name(new)
         with self.lock:
+            self._sweep_secret_upgrades()
             meta = self.registry.scoped_accounts().get((provider_id, old))
             if meta is None:
                 raise OpenCodeSwapError(f"no such account: {old}")

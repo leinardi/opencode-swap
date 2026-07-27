@@ -117,19 +117,27 @@ $XDG_DATA_HOME/opencode-swap/            (0700)
     unclaimed-<provider-hash>-<ts>-<suffix>.json (0600) — foreign login preserved instead of overwritten
     discarded-restore-<ts>-<suffix>.json (0600) — full auth.json snapshot archived by
                                           `restore --discard-pending` before dropping a stuck auth.json.restore
-  secrets/                               (0700, primary on Linux; macOS fallback)
-    v2-<sha256-key>.enc                  (0600) — base64-obfuscated record;
-                                          legacy openai_<name>.enc files migrate on write
+  secrets/                               (0700, primary on Linux; macOS outage fallback)
+    v3-<sha256-key>.enc                  (0600) — AES-256-GCM envelope, macOS primary;
+                                          the record's data key lives in the Keychain, not this file
+    v2-<sha256-key>.enc                  (0600) — base64-obfuscated record (Linux primary,
+                                          macOS genuine-outage fallback); legacy openai_<name>.enc
+                                          files migrate on write
   .lock                                  — FileLock target
 
 OpenCode's own state (read + atomically rewritten):
   $XDG_DATA_HOME/opencode/auth.json      (0600, owned by OpenCode)
 ```
 
-`registry.json` never contains a token. The actual OAuth/API-key record for
-each saved account lives in the macOS Keychain under service `opencode-swap`,
-keyed by `"<provider>:<name>"`, or in the `secrets/` files on Linux and when
-macOS Keychain is unavailable.
+`registry.json` never contains a token. On macOS, the actual OAuth/API-key
+record for each saved account is AES-256-GCM ciphertext in a `secrets/v3-*.enc`
+file; its data key lives in the macOS Keychain under service `opencode-swap`,
+keyed by `"<provider>:<name>"`. This exists because `security -i`'s stdin
+transport truncates around 4095 characters (see `macos_keychain.py`) — far
+below a hex-encoded OAuth record — while the data key is a fixed 64 hex chars
+regardless of credential size, so it always fits. On Linux, and during a
+genuine macOS Keychain outage, the record itself is a base64-obfuscated
+`secrets/v2-*.enc` file instead.
 
 Registry v2 scopes account names and active hints by provider. Migration from
 v1 is atomic and does not move secrets because v1 already used provider-scoped

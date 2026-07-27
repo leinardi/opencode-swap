@@ -20,6 +20,7 @@ from opencode_swap import __version__, backup, opencode_auth, paths, process_det
 from opencode_swap.exceptions import AuthFileError, BackupError, OpenCodeSwapError, SchemaError
 from opencode_swap.models import ImportConflictAction, Validity
 from opencode_swap.providers import get_provider
+from opencode_swap.store import RecordLocation
 from opencode_swap.switcher import Switcher
 from opencode_swap.usage import UsageSnapshot
 
@@ -512,8 +513,13 @@ def cmd_doctor(switcher: Switcher, args: argparse.Namespace) -> int:
         print(status)
 
     print(f"opencode-swap data dir: {switcher.data_root}")
-    print(f"  secret backend: {switcher.secrets.backend_name}")
     accounts = switcher.registry.scoped_accounts()
+    locations = [switcher.secrets.record_location(f"{provider}:{name}") for provider, name in accounts]
+    sealed_count = locations.count(RecordLocation.SEALED)
+    fallback_count = locations.count(RecordLocation.FILE_FALLBACK)
+    missing_count = locations.count(RecordLocation.MISSING)
+    backend_detail = f"{sealed_count} sealed, {fallback_count} plaintext-fallback, {missing_count} unreadable"
+    print(f"  secret backend: {switcher.secrets.backend_name} ({backend_detail})")
     print(f"  managed accounts: {len(accounts)}")
     active = [
         f"{provider}:{name}" for provider in sorted({meta.provider for meta in accounts.values()}) if (name := switcher.registry.get_active(provider))

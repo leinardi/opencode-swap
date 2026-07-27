@@ -36,8 +36,9 @@ false security.
 | Encrypted vault (age/libsodium + passphrase) | possible | possible | works | new crypto dependency + passphrase UX | — |
 | Filesystem-only, `0600` | **chosen** | fallback | **chosen** | none | n/a — always available |
 
-**Chosen for v1: private `0600` files on Linux, macOS Keychain with a sticky
-file fallback, and no custom cryptography.**
+**Chosen for v1: private `0600` files on Linux; on macOS, an AES-256-GCM
+envelope whose data key lives in the Keychain, with a sticky plaintext-file
+fallback for a genuine outage.**
 
 Pre-release Linux checkouts briefly used Secret Service. No published version
 used that backend. Those checkouts must export accounts before updating and
@@ -46,8 +47,8 @@ locked or unhealthy service can prompt interactively or block indefinitely.
 
 - **macOS:** the system `security` CLI, pinned to `/usr/bin/security`
   (not resolved via `PATH`, to prevent an attacker-controlled binary earlier
-  on `PATH` from intercepting secrets). The secret is passed via **stdin**,
-  not argv, so it never appears in a process listing. This mirrors
+  on `PATH` from intercepting secrets). Every value passed to it is via
+  **stdin**, not argv, so it never appears in a process listing. This mirrors
   `claude-swap`'s approach exactly, including its reasoning for *not* using
   the third-party `keyring` library on macOS: Keychain items are
   created/read by the same stable system binary, so reads stay silent
@@ -55,6 +56,16 @@ locked or unhealthy service can prompt interactively or block indefinitely.
   (`keyring`, or any in-process Security.framework call) ties the item's
   access to the interpreter binary itself, which a tool upgrade can rebuild
   — at which point macOS may show a "wants to use your keychain" prompt.
+  `security -i`'s stdin transport truncates a command around 4095
+  characters (measured; see `macos_keychain.py`), well below a hex-encoded
+  OAuth record — so the Keychain never holds the credential directly.
+  Instead it holds a 32-byte AES-256-GCM data key (`sealed.py`), a fixed 64
+  hex chars regardless of credential size, and the credential is ciphertext
+  in a `secrets/v3-*.enc` file, AAD-bound to its `"<provider>:<name>"` key
+  so a ciphertext file copied or renamed onto another account fails to
+  decrypt rather than silently reading as that account's credential.
+  `pycryptodomex` is already a transitive dependency of `pyzipper` (used for
+  portable export/import); this is the same library, declared directly.
 - **Linux:** a base64-encoded blob in a `0600` file under a `0700` directory.
   This is **obfuscation, not encryption** — anyone with read access to the file
   can decode it. OpenCode stores the same credentials as raw JSON in its own
@@ -66,20 +77,30 @@ locked or unhealthy service can prompt interactively or block indefinitely.
   the CLI indefinitely instead of returning an error for file fallback. A
   keyring is therefore incompatible with a background status widget, not an
   improvement over OpenCode's own private-file security model.
-- **macOS fallback:** the same private-file backend when Keychain is
-  unavailable.
+- **macOS fallback:** the same private-file (base64, v2) backend as Linux,
+  used only when a Keychain operation fails for a genuine reason (locked,
+  denied, timed out) — not for credential size, which the envelope format
+  makes irrelevant.
 - **Sticky fallback:** once a macOS Keychain operation fails during a
   process, that `SecretStore` instance pins itself to the file backend for
   the rest of its life — it never flip-flops between backends mid-operation
   even if the backend "recovers" partway through. Account deletion then
   refuses rather than claiming an unreachable OS copy was removed.
   (`store.py`)
-- **File-wins-on-read, reconcile-on-write (macOS):** if a fallback file exists for
-  an account, it's treated as authoritative on read (it may be fresher than
-  a stale/unreachable keychain copy from a prior fallback episode); a
-  successful Keychain write deletes any stale fallback file for
-  that account afterward. Both ported directly from `claude-swap`'s
-  `credentials.py`.
+- **v3-wins-on-read (macOS), file-wins-on-read (v2/legacy), reconcile-on-write:**
+  a sealed v3 file is always authoritative when present — its Keychain data
+  key is the only thing that can decrypt it, so unlike v2 it cannot go stale
+  the way a plain fallback copy can. Absent a v3 file, a v2/legacy fallback
+  file is treated as authoritative on read (it may be fresher than a
+  stale/unreachable Keychain copy from a prior fallback episode). A
+  successful v3 (or, off macOS, v2) write deletes any stale older-format
+  file for that account afterward, best-effort. Ported from `claude-swap`'s
+  `credentials.py` and extended for the envelope format.
+- **Format upgrade:** an account still on the v2/legacy format is
+  transparently resealed into v3 the next time it's read while a mutating
+  command holds `Switcher.lock` (`SecretStore.upgrade`, swept once per
+  command) — no separate migration step, and no risk of two concurrent
+  processes minting two different data keys for the same account.
 
 Deliberately **not** built for persistent storage: any custom encryption
 scheme, app-managed key derivation, or a "vault" file. Those would add real
@@ -103,7 +124,7 @@ a strong, unique passphrase; archive security depends on its entropy.
 | --- | --- | --- |
 | Provider-scoped account name, type, account id, email, added timestamp, active hint | `registry.json` (`0600`) | No — never a token |
 | Original registry before automatic v1-to-v2 migration | `registry.v1.json.bak` (`0600`) | No — never a token |
-| Access token, refresh token, API key | Linux `secrets/*.enc` (`0600`), or macOS Keychain/file fallback | Yes |
+| Access token, refresh token, API key | Linux `secrets/v2-*.enc` (`0600`, base64); macOS `secrets/v3-*.enc` (`0600`, AES-256-GCM) + Keychain data key, or `v2-*.enc` fallback on a genuine outage | Yes |
 | Pre-switch/pristine/unclaimed/discarded-restore `auth.json` snapshots | `backups/*.json` (`0600`, dir `0700`) | Yes — full credential records |
 | Explicit portable account export | User-selected path (`0600`, AES-256 encrypted) | Yes — delete after import |
 | `opencode-swap`'s own lock file | `.lock` (empty, no data) | No |
