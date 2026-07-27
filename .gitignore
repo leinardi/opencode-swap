@@ -209,9 +209,16 @@ __marimo__/
 .streamlit/secrets.toml
 
 #IDEs
+# IntelliJ IDEA / JetBrains
 .idea/*
 !.idea/codeStyles/
-/.vscode/
+!.idea/copyright/
+*.iml
+out/
+.gradle/
+
+# VS Code
+.vscode/
 
 # macOS
 .DS_Store
