@@ -264,13 +264,14 @@ function StatusView(props: {
                   const usage = createMemo(() => usageDetails(value()));
                   const usageColor = createMemo(() => {
                     const theme = props.api.theme.current;
+                    const dracula = props.api.theme.selected.toLowerCase() === "dracula";
                     switch (usage()?.band) {
                       case "red":
                         return theme.error;
                       case "orange":
-                        return theme.warning;
+                        return dracula ? theme.info : theme.warning;
                       case "yellow":
-                        return theme.info;
+                        return dracula ? theme.warning : theme.info;
                       default:
                         return theme.success;
                     }
