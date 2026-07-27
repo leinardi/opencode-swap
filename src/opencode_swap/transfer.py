@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
-import pyzipper  # type: ignore[import-not-found]
+import pyzipper  # type: ignore[import-untyped]
 
 from opencode_swap.atomic import atomic_write_bytes_exclusive
 from opencode_swap.exceptions import RegistryError, TransferError

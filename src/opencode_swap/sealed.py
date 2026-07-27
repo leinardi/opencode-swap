@@ -20,8 +20,8 @@ producing garbage under the wrong identity.
 
 from __future__ import annotations
 
-from Cryptodome.Cipher import AES  # type: ignore[import-not-found]
-from Cryptodome.Random import get_random_bytes  # type: ignore[import-not-found]
+from Cryptodome.Cipher import AES
+from Cryptodome.Random import get_random_bytes
 
 from opencode_swap.exceptions import SecretStoreError
 

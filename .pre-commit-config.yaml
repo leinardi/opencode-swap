@@ -21,6 +21,8 @@ repos:
           # add stubs the project needs
           - InquirerPy
           - cryptography
+          - pycryptodomex
+          - pyzipper
           - rich
           - rich-argparse
           - types-requests
@@ -43,6 +45,8 @@ repos:
           # add stubs the project needs
           - InquirerPy
           - cryptography
+          - pycryptodomex
+          - pyzipper
           - rich
           - rich-argparse
           - types-requests
