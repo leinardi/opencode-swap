@@ -3,6 +3,10 @@
 Optional OpenCode terminal UI integration. `opencode-swap` remains sole owner
 of credentials and account-switch transactions.
 
+![Active account and usage in the session prompt](assets/session_prompt_right.gif)
+
+![Account switching from the TUI command palette](assets/command.gif)
+
 ## Install from npm
 
 Install the Python CLI first, then install TUI package globally:
@@ -66,7 +70,7 @@ account name.
 
 Set `{ "usage": false }` in the plugin options (see above) to disable this:
 the widget then shows only the account name, and the plugin makes no network
-calls at all — every other refresh continues to use plain `status --json`,
+calls at all; every other refresh continues to use plain `status --json`,
 which is fully local/offline.
 
 ## Behavior
@@ -74,9 +78,9 @@ which is fully local/offline.
 - Shows `<account> · <usage>% @<reset>` at right side of session prompt
   metadata. When OpenAI supplies its window duration and reset time, usage color
   compares spend against linear progress through that exact window: green below
-  85% of projection, orange below 105%, and red at or above 105%. First 5% of
-  the window stays green. Without complete window data, absolute usage is green
-  below 50%, yellow from 50%, orange from 70%, and red from 90%.
+  85% of projection, orange below 105%, and red at or above 105% (the first 5%
+  of the window always stays green). Without complete window data, absolute
+  usage is green below 50%, yellow from 50%, orange from 70%, and red from 90%.
 - Shows nothing until session has sent a request using provider managed by
   `opencode-swap`.
 - Uses latest sent user message's `model.providerID`, not internal OpenCode

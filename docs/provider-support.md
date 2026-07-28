@@ -27,18 +27,18 @@ records while requiring explicit implementations for OAuth.
 
 | Provider/auth | Status | OpenCode behavior relevant to switching |
 | --- | --- | --- |
-| OpenAI API/OAuth | Supported; end-to-end tested | OAuth rotates tokens and usually has stable `accountId` |
-| Arbitrary canonical API provider | Supported; testers wanted | Static `key`; optional string-to-string metadata |
-| GitHub Copilot OAuth | Supported; testers wanted | Durable token in `refresh` and `access`; `expires=0` means usable |
-| Poe API/OAuth | Supported; testers wanted | Browser flow yields API key; no refresh rotation |
-| xAI API | Supported; testers wanted | Canonical API record |
-| xAI OAuth | Guarded support; testers wanted | Rotates tokens; accepted only when access JWT has stable `iss` and `sub` |
-| DigitalOcean | Generic API support; testers wanted | Browser OAuth result is stored as API record; metadata may change |
-| Azure/Cloudflare/Snowflake PAT/GitLab PAT/Bedrock/SAP | Generic API support; testers wanted | Canonical API record, sometimes with required metadata |
-| GitLab OAuth | Unsupported | Refresh rotates; stored record has no provably stable user identity |
-| Snowflake OAuth | Unsupported | `accountId` identifies account/tenant and may not identify user |
-| Well-known URL auth | Unsupported | Remote command/environment-token mechanism, not normal provider accounts |
-| Custom/unknown OAuth | Unsupported | Shape alone cannot prove safe identity and refresh semantics |
+| OpenAI API/OAuth | ✅ Supported; end-to-end tested | OAuth rotates tokens and usually has stable `accountId` |
+| Arbitrary canonical API provider | ⚠️ Supported; testers wanted | Static `key`; optional string-to-string metadata |
+| GitHub Copilot OAuth | ⚠️ Supported; testers wanted | Durable token in `refresh` and `access`; `expires=0` means usable |
+| Poe API/OAuth | ⚠️ Supported; testers wanted | Browser flow yields API key; no refresh rotation |
+| xAI API | ⚠️ Supported; testers wanted | Canonical API record |
+| xAI OAuth | ⚠️ Guarded support; testers wanted | Rotates tokens; accepted only when access JWT has stable `iss` and `sub` |
+| DigitalOcean | ⚠️ Generic API support; testers wanted | Browser OAuth result is stored as API record; metadata may change |
+| Azure/Cloudflare/Snowflake PAT/GitLab PAT/Bedrock/SAP | ⚠️ Generic API support; testers wanted | Canonical API record, sometimes with required metadata |
+| GitLab OAuth | ❌ Unsupported | Refresh rotates; stored record has no provably stable user identity |
+| Snowflake OAuth | ❌ Unsupported | `accountId` identifies account/tenant and may not identify user |
+| Well-known URL auth | ❌ Unsupported | Remote command/environment-token mechanism, not normal provider accounts |
+| Custom/unknown OAuth | ❌ Unsupported | Shape alone cannot prove safe identity and refresh semantics |
 
 Failing closed matters: assigning a rotated but unidentifiable live credential
 to wrong saved account could destroy that saved account's previous credential.
