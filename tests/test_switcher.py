@@ -5,9 +5,10 @@ import time
 import pytest
 
 from opencode_swap import macos_keychain
-from opencode_swap.exceptions import AccountExistsError, OpenCodeSwapError, SchemaError
-from opencode_swap.models import AccountMeta, Platform
-from opencode_swap.switcher import Switcher
+from opencode_swap.exceptions import AccountExistsError, OpenCodeSwapError, RefreshError, SchemaError
+from opencode_swap.models import AccountMeta, Platform, Validity
+from opencode_swap.oauth_refresh import RefreshedTokens
+from opencode_swap.switcher import RefreshOutcome, Switcher
 from tests.helpers import make_jwt
 
 
@@ -18,6 +19,19 @@ def oauth_entry(account_id="acct-1", refresh="refresh-1", **overrides):
         "access": make_jwt({"chatgpt_account_id": account_id}),
         "expires": int((time.time() + 3600) * 1000),
         "accountId": account_id,
+    }
+    entry.update(overrides)
+    return entry
+
+
+def unstable_entry(refresh, **overrides):
+    """An oauth entry with no accountId claim -- identity_is_stable() is
+    False for this record, since it falls back to the refresh token itself."""
+    entry = {
+        "type": "oauth",
+        "refresh": refresh,
+        "access": make_jwt({}),
+        "expires": int((time.time() + 3600) * 1000),
     }
     entry.update(overrides)
     return entry
@@ -489,6 +503,321 @@ def test_fetch_usage_delegates_with_access_and_account_id(switcher, monkeypatch)
     assert result == "sentinel"
     assert captured["account_id"] == "acct-1"
     assert captured["access"]  # the stored access token was passed through
+
+
+def test_fetch_usage_prefers_live_record_for_active_account_even_if_stored_is_stale(switcher, monkeypatch):
+    """OpenCode rotates tokens in auth.json in place; a healthy active
+    account must not be treated as expired just because opencode-swap's
+    last-captured secret-store snapshot predates that rotation."""
+    write_auth(switcher.opencode_auth_path, oauth_entry(account_id="acct-1", refresh="r1"))
+    switcher.add_account("work")
+
+    live_access = json.loads(switcher.opencode_auth_path.read_text())["openai"]["access"]
+    switcher.secrets.put(
+        "openai:work",
+        json.dumps(oauth_entry(account_id="acct-1", refresh="stale-refresh", expires=int((time.time() - 3600) * 1000))),
+    )
+
+    captured = {}
+    monkeypatch.setattr(
+        "opencode_swap.switcher.usage.fetch_openai_oauth_usage",
+        lambda access, account_id: (captured.__setitem__("access", access), "sentinel")[1],
+    )
+    result = switcher.fetch_usage("work")
+    assert result == "sentinel"
+    assert captured["access"] == live_access  # live (fresh) token used, not the stale stored one
+    assert json.loads(switcher.secrets.get("openai:work"))["refresh"] == "r1"  # synced back
+
+
+def test_fetch_usage_syncs_drifted_live_record_into_secret_store(switcher, monkeypatch):
+    write_auth(switcher.opencode_auth_path, oauth_entry(account_id="acct-1", refresh="r1"))
+    switcher.add_account("work")
+    write_auth(switcher.opencode_auth_path, oauth_entry(account_id="acct-1", refresh="rotated-refresh"))
+
+    monkeypatch.setattr("opencode_swap.switcher.usage.fetch_openai_oauth_usage", lambda *a, **k: "sentinel")
+    switcher.fetch_usage("work")
+
+    assert json.loads(switcher.secrets.get("openai:work"))["refresh"] == "rotated-refresh"
+
+
+def test_fetch_usage_reports_expired_live_record_without_refreshing_or_writing(switcher, monkeypatch):
+    """Never triggers a standalone refresh, and never writes auth.json, for
+    the account OpenCode itself currently has active -- OpenCode owns that
+    refresh on its own next request."""
+    expired = oauth_entry(account_id="acct-1", refresh="r1", expires=int((time.time() - 3600) * 1000))
+    write_auth(switcher.opencode_auth_path, expired)
+    switcher.add_account("work")
+    auth_mtime_before = switcher.opencode_auth_path.stat().st_mtime_ns
+
+    def fail_if_called(*a, **k):
+        raise AssertionError("must not attempt a standalone refresh for the live-active account")
+
+    monkeypatch.setattr("opencode_swap.switcher.usage.fetch_openai_oauth_usage", fail_if_called)
+    result = switcher.fetch_usage("work")
+
+    assert result.available is False
+    assert "OpenCode" in result.message
+    assert switcher.opencode_auth_path.stat().st_mtime_ns == auth_mtime_before
+
+
+def test_fetch_usage_refreshes_stored_expired_non_active_account(switcher, monkeypatch):
+    write_auth(switcher.opencode_auth_path, oauth_entry(account_id="acct-a", refresh="ra"))
+    switcher.add_account("a")
+    switcher.secrets.put(
+        "openai:a",
+        json.dumps(oauth_entry(account_id="acct-a", refresh="expired-refresh", expires=int((time.time() - 3600) * 1000))),
+    )
+    # A different account is the one OpenCode currently has live, so "a" can't be
+    # attributed to the live record and must fall back to its stored (expired) copy.
+    write_auth(switcher.opencode_auth_path, oauth_entry(account_id="acct-b", refresh="rb"))
+    switcher.add_account("b")
+
+    monkeypatch.setattr(
+        "opencode_swap.providers.openai.oauth_refresh.refresh_openai_oauth",
+        lambda refresh_token, **k: RefreshedTokens(
+            access="new-access", refresh="new-refresh", expires=(time.time() + 3600) * 1000, account_id="acct-a"
+        ),
+    )
+    captured = {}
+    monkeypatch.setattr(
+        "opencode_swap.switcher.usage.fetch_openai_oauth_usage",
+        lambda access, account_id: (captured.__setitem__("access", access), "sentinel")[1],
+    )
+
+    result = switcher.fetch_usage("a")
+    assert result == "sentinel"
+    assert captured["access"] == "new-access"
+    assert json.loads(switcher.secrets.get("openai:a"))["refresh"] == "new-refresh"
+
+
+def test_fetch_usage_returns_unavailable_snapshot_when_refresh_is_rejected(switcher, monkeypatch):
+    write_auth(switcher.opencode_auth_path, oauth_entry(account_id="acct-a", refresh="ra"))
+    switcher.add_account("a")
+    switcher.secrets.put(
+        "openai:a",
+        json.dumps(oauth_entry(account_id="acct-a", refresh="dead-refresh", expires=int((time.time() - 3600) * 1000))),
+    )
+    write_auth(switcher.opencode_auth_path, oauth_entry(account_id="acct-b", refresh="rb"))
+    switcher.add_account("b")
+
+    def raise_refresh_error(refresh_token, **k):
+        raise RefreshError("refresh token was rejected")
+
+    monkeypatch.setattr("opencode_swap.providers.openai.oauth_refresh.refresh_openai_oauth", raise_refresh_error)
+
+    result = switcher.fetch_usage("a")
+    assert result.available is False
+    assert "rejected" in result.message
+
+
+def test_live_record_not_attributed_via_active_hint_when_identity_unstable(switcher, monkeypatch):
+    """Regression: a saved account with no stable accountId claim must never
+    be attributed a live credential purely because the registry still
+    records it as "active" -- use_account itself only ever uses that hint to
+    decide whether to *refuse* an ambiguous live credential (stash it as
+    unclaimed), never to *accept* it as belonging to the active account.
+    Accepting it here would let a foreign OpenCode login silently overwrite
+    the saved account's real stored credentials on a plain, non-mutating
+    `list`."""
+    write_auth(switcher.opencode_auth_path, unstable_entry("work-refresh"))
+    switcher.add_account("work")  # registry now records "work" as active, with an unstable identity
+    original_stored = switcher.secrets.get("openai:work")
+
+    # A foreign OpenCode login happens directly, bypassing opencode-swap --
+    # also lacking a stable accountId claim, so identity can't distinguish it.
+    write_auth(switcher.opencode_auth_path, unstable_entry("foreign-refresh"))
+
+    def fail_if_called(*a, **k):
+        raise AssertionError("must not attempt a standalone refresh for an unattributed live credential")
+
+    monkeypatch.setattr("opencode_swap.providers.openai.oauth_refresh.refresh_openai_oauth", fail_if_called)
+
+    assert switcher.account_validity("work") == Validity.OK
+    assert switcher.secrets.get("openai:work") == original_stored  # never overwritten with the foreign credential
+
+
+def test_account_validity_prefers_live_record_over_stale_stored_copy(switcher):
+    write_auth(switcher.opencode_auth_path, oauth_entry(account_id="acct-1", refresh="r1"))
+    switcher.add_account("work")
+    switcher.secrets.put(
+        "openai:work",
+        json.dumps(oauth_entry(account_id="acct-1", refresh="stale-refresh", expires=int((time.time() - 3600) * 1000))),
+    )
+    assert switcher.account_validity("work") == Validity.OK
+
+
+def test_account_validity_resyncs_to_latest_live_state_across_calls(switcher):
+    """Regression: each call must re-read the live record fresh rather than
+    trust anything cached from a previous call -- a stale cached live
+    snapshot, persisted after a delay, could otherwise overwrite a newer
+    sync-back (e.g. from a concurrent `use`) with older content."""
+    write_auth(switcher.opencode_auth_path, oauth_entry(account_id="acct-1", refresh="r1"))
+    switcher.add_account("work")
+    switcher.account_validity("work")
+    assert json.loads(switcher.secrets.get("openai:work"))["refresh"] == "r1"
+
+    # OpenCode rotates the live token in place.
+    write_auth(switcher.opencode_auth_path, oauth_entry(account_id="acct-1", refresh="r2-rotated"))
+    switcher.account_validity("work")
+    assert json.loads(switcher.secrets.get("openai:work"))["refresh"] == "r2-rotated"
+
+
+def test_refresh_account_persists_rotated_token_and_returns_ok(switcher, monkeypatch):
+    write_auth(switcher.opencode_auth_path, oauth_entry(account_id="acct-a", refresh="ra"))
+    switcher.add_account("a")
+    switcher.secrets.put(
+        "openai:a",
+        json.dumps(oauth_entry(account_id="acct-a", refresh="expired-refresh", expires=int((time.time() - 3600) * 1000))),
+    )
+    write_auth(switcher.opencode_auth_path, oauth_entry(account_id="acct-b", refresh="rb"))
+    switcher.add_account("b")
+
+    monkeypatch.setattr(
+        "opencode_swap.providers.openai.oauth_refresh.refresh_openai_oauth",
+        lambda refresh_token, **k: RefreshedTokens(
+            access="new-access", refresh="new-refresh", expires=(time.time() + 3600) * 1000, account_id="acct-a"
+        ),
+    )
+    assert switcher.refresh_account("a").validity == Validity.OK
+    assert json.loads(switcher.secrets.get("openai:a"))["refresh"] == "new-refresh"
+
+
+def test_refresh_account_never_refreshes_the_live_active_accounts_token(switcher, monkeypatch):
+    """Regression: refresh_account (and fetch_usage) must never spend a
+    standalone refresh on the account currently active in OpenCode, even if
+    opencode-swap's own stored copy of it looks expired. OpenCode may
+    refresh that account's token on its own next request; a standalone
+    refresh here would invalidate the refresh token OpenCode itself is
+    about to try, breaking the live session, and a subsequent self-switch
+    would then sync the (now-stale) live record back over the freshly
+    rotated stored one, losing it for good."""
+    write_auth(switcher.opencode_auth_path, oauth_entry(account_id="acct-1", refresh="live-refresh"))
+    switcher.add_account("work")  # "work" is now the live-active account
+
+    # Corrupt only the *stored* copy to look expired, while the identity
+    # (accountId) still matches -- this must still resolve via the live
+    # record, never trigger a refresh.
+    switcher.secrets.put(
+        "openai:work",
+        json.dumps(oauth_entry(account_id="acct-1", refresh="live-refresh", expires=int((time.time() - 3600) * 1000))),
+    )
+
+    def fail_if_called(refresh_token, **kwargs):
+        raise AssertionError("must not standalone-refresh the live-active account's token")
+
+    monkeypatch.setattr("opencode_swap.providers.openai.oauth_refresh.refresh_openai_oauth", fail_if_called)
+
+    assert switcher.refresh_account("work").validity == Validity.OK
+    # Synced back to the live (valid) record, not left at the corrupted stored copy.
+    assert json.loads(switcher.secrets.get("openai:work"))["expires"] > time.time() * 1000
+
+
+def test_ensure_refreshed_refuses_standalone_refresh_when_live_auth_file_is_corrupt(switcher, monkeypatch):
+    """Regression: an existing-but-unreadable/corrupt auth.json is not proof
+    that a saved account isn't the one OpenCode currently has live -- unlike
+    a genuinely absent file, its content is merely unknown. Falling through
+    to a standalone refresh of the stored copy in that case risks spending
+    a refresh token the (unreadable) live file might still be relying on."""
+    write_auth(switcher.opencode_auth_path, oauth_entry(account_id="acct-a", refresh="ra"))
+    switcher.add_account("a")
+    switcher.secrets.put(
+        "openai:a",
+        json.dumps(oauth_entry(account_id="acct-a", refresh="expired-refresh", expires=int((time.time() - 3600) * 1000))),
+    )
+    write_auth(switcher.opencode_auth_path, oauth_entry(account_id="acct-b", refresh="rb"))
+    switcher.add_account("b")  # "b" is now live-active; "a" is a stored-only account
+
+    # auth.json exists but is corrupt -- must not be treated as "definitely not live."
+    switcher.opencode_auth_path.write_text("{not valid json")
+
+    def fail_if_called(*a, **k):
+        raise AssertionError("must not standalone-refresh while live auth.json state is unreadable")
+
+    monkeypatch.setattr("opencode_swap.providers.openai.oauth_refresh.refresh_openai_oauth", fail_if_called)
+
+    result = switcher.fetch_usage("a")
+    assert result.available is False
+    # The stored (still-expired-looking) copy is untouched -- no refresh attempted.
+    assert json.loads(switcher.secrets.get("openai:a"))["refresh"] == "expired-refresh"
+
+
+def test_ensure_refreshed_refuses_standalone_refresh_during_unstable_to_stable_identity_transition(switcher, monkeypatch):
+    """Regression: OpenCode rotates the live-active account's token and the
+    new token happens to gain a stable accountId claim the old one lacked.
+    The stored record's identity (computed from the old, unstable claim) no
+    longer matches the live record's, so a naive "not attributable" read
+    falls through to a standalone refresh of the stored (likely
+    already-superseded) refresh token -- which would spend an already-dead
+    token and misreport a perfectly healthy account as needing re-login."""
+    write_auth(switcher.opencode_auth_path, unstable_entry("r1"))
+    switcher.add_account("work")  # registry-active, unstable identity
+
+    # OpenCode rotates in place: the new token now carries a stable accountId claim.
+    write_auth(switcher.opencode_auth_path, oauth_entry(account_id="acct-x", refresh="r2-rotated"))
+
+    # The stale stored copy still reflects the pre-rotation, now-likely-dead token.
+    switcher.secrets.put("openai:work", json.dumps(unstable_entry("r1", expires=int((time.time() - 3600) * 1000))))
+
+    def fail_if_called(*a, **k):
+        raise AssertionError("must not standalone-refresh during an identity transition for the live-active account")
+
+    monkeypatch.setattr("opencode_swap.providers.openai.oauth_refresh.refresh_openai_oauth", fail_if_called)
+
+    result = switcher.fetch_usage("work")
+    assert result.available is False
+    assert json.loads(switcher.secrets.get("openai:work"))["refresh"] == "r1"  # untouched, no refresh attempted
+
+
+def test_refresh_account_raises_for_unknown_account(switcher):
+    with pytest.raises(OpenCodeSwapError, match="no such account"):
+        switcher.refresh_account("ghost")
+
+
+def test_refresh_account_no_op_for_api_key_account(switcher):
+    write_auth(switcher.opencode_auth_path, {"type": "api", "key": "sk-abc"})
+    switcher.add_account("work")
+
+    assert switcher.refresh_account("work").validity == Validity.OK
+
+
+def test_refresh_account_reports_no_support_distinct_from_ambiguous(switcher, monkeypatch):
+    """Regression: EXPIRED alone doesn't say WHY a refresh didn't happen.
+    NO_SUPPORT (this record type has no standalone refresh at all) must be
+    reported distinctly from AMBIGUOUS (this account genuinely supports
+    refresh, but it was skipped this time because live state couldn't be
+    verified) -- collapsing them produced a false "no standalone refresh
+    available for this account type" message for an OpenAI oauth account,
+    which does support it."""
+    write_auth(switcher.opencode_auth_path, oauth_entry(account_id="acct-a", refresh="ra"))
+    switcher.add_account("a")
+    switcher.secrets.put(
+        "openai:a",
+        json.dumps(oauth_entry(account_id="acct-a", refresh="expired-refresh", expires=int((time.time() - 3600) * 1000))),
+    )
+    write_auth(switcher.opencode_auth_path, oauth_entry(account_id="acct-b", refresh="rb"))
+    switcher.add_account("b")  # "a" is a stored-only, non-ambiguous, expired account
+
+    monkeypatch.setattr("opencode_swap.providers.openai.OpenAiProvider.refresh", lambda self, record: None)
+
+    result = switcher.refresh_account("a")
+    assert result.validity == Validity.EXPIRED
+    assert result.outcome == RefreshOutcome.NO_SUPPORT
+
+
+def test_refresh_account_reports_ambiguous_outcome_not_no_support(switcher, monkeypatch):
+    write_auth(switcher.opencode_auth_path, unstable_entry("r1"))
+    switcher.add_account("work")
+    write_auth(switcher.opencode_auth_path, oauth_entry(account_id="acct-x", refresh="r2-rotated"))
+    switcher.secrets.put("openai:work", json.dumps(unstable_entry("r1", expires=int((time.time() - 3600) * 1000))))
+
+    def fail_if_called(*a, **k):
+        raise AssertionError("must not standalone-refresh during an identity transition for the live-active account")
+
+    monkeypatch.setattr("opencode_swap.providers.openai.oauth_refresh.refresh_openai_oauth", fail_if_called)
+
+    result = switcher.refresh_account("work")
+    assert result.validity == Validity.EXPIRED
+    assert result.outcome == RefreshOutcome.AMBIGUOUS
 
 
 def test_data_root_created_with_0700(switcher):

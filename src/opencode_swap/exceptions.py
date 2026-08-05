@@ -46,3 +46,15 @@ class AccountExistsError(OpenCodeSwapError):
 
 class TransferError(OpenCodeSwapError):
     """An account transfer archive is unsafe, corrupt, or incompatible."""
+
+
+class RefreshError(OpenCodeSwapError):
+    """A standalone OAuth token refresh was attempted and rejected/failed.
+
+    Distinct from usage.py's UsageSnapshot(available=False): that case is a
+    read that degrades gracefully. A rejected refresh grant means the
+    account's refresh token is spent -- OpenAI issues a new one on every use
+    (docs/architecture.md#why-sync-back-is-mandatory) -- so the account is
+    genuinely unusable until the owner re-authenticates with OpenCode
+    (`opencode auth login`) and re-adds it (`opencode-swap add`).
+    """

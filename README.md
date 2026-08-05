@@ -99,6 +99,7 @@ tokens in place; it won't create a duplicate.
 | `opencode-swap status [provider] [--json] [--usage]` | Show integration status; `--json` emits versioned secret-safe data. |
 | `opencode-swap use <provider> <name> [-y]` | Activate one saved provider account. |
 | `opencode-swap switch <provider> [-y]` | Switch to next saved account for provider. |
+| `opencode-swap refresh <provider> [name]` | Ensure a saved account's OAuth token is valid, refreshing over the network if expired (no-op if already valid); every saved account for the provider if `name` is omitted. Never refreshes whichever account is currently active in OpenCode — that account's own next request handles its refresh. |
 | `opencode-swap remove <provider> <name> [-y]` | Delete a saved provider account. |
 | `opencode-swap rename <provider> <old> <new>` | Rename a saved provider account. |
 | `opencode-swap export <path>` | Export all saved accounts to a new password-encrypted `.ocs` archive. |

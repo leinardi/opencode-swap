@@ -99,11 +99,14 @@ practice; don't rely on it being populated.
   itself: `POST {issuer}/oauth/token`, `grant_type=refresh_token`,
   `client_id=app_EMoamEEZ73f0CkXaXp7hrann`, against
   `https://auth.openai.com` **(source, `codex.ts:125-139`)**. This is a
-  **public PKCE OAuth client with no client secret** — a standalone refresh
-  is technically possible, but `opencode-swap` deliberately doesn't
-  implement one (see `docs/roadmap.md` and the M5 design discussion) to
-  avoid coupling to this private constant when OpenCode already refreshes
-  on the next request anyway.
+  **public PKCE OAuth client with no client secret**, which is what makes a
+  standalone refresh from `opencode-swap` itself safe to add: `oauth_refresh.py`
+  makes this exact request for accounts OpenCode doesn't currently have live
+  (see `docs/roadmap.md`'s "Known gaps" for where it is and isn't triggered).
+  For whichever account *is* currently live in OpenCode, `opencode-swap`
+  still never refreshes it standalone — OpenCode already refreshes on its
+  own next request, and its stored refresh token has likely already been
+  consumed by that very rotation.
 - On a successful refresh, OpenCode **writes the rotated tokens back** —
   both `access` and `refresh` (OpenAI issues a new refresh token on every
   use) — through the same write path as any other update

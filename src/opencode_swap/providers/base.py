@@ -54,3 +54,14 @@ class Provider(Protocol):
     def validate(self, record: AuthRecord) -> Validity:
         """Whether the record looks usable, expired, or malformed."""
         ...
+
+    def refresh(self, record: AuthRecord) -> AuthRecord | None:
+        """Rotated-token copy of `record` from a standalone OAuth refresh.
+
+        Returns None if this provider/record type has no standalone refresh
+        (the default for every provider but OpenAI oauth records). Raises
+        RefreshError if a refresh was attempted and the grant was rejected
+        or the request otherwise failed -- callers must not treat that the
+        same as "no refresh available".
+        """
+        ...

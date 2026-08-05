@@ -7,6 +7,8 @@ import pytest
 from opencode_swap import backup, cli, process_detection, transfer
 from opencode_swap.exceptions import RegistryError
 from opencode_swap.models import AccountMeta, Platform
+from opencode_swap.oauth_refresh import RefreshedTokens
+from opencode_swap.switcher import Switcher
 from opencode_swap.usage import UsageSnapshot
 from tests.helpers import make_jwt
 
@@ -144,6 +146,144 @@ def test_list_usage_flag_shows_usage_line(tmp_path, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "55%" in out
     assert "ChatGPT Plus" in out
+
+
+def test_list_does_not_tag_healthy_active_account_expired_despite_stale_stored_copy(tmp_path, capsys):
+    """Regression: fetch_usage/account_validity must read OpenCode's live
+    auth.json for the active account rather than opencode-swap's
+    last-captured secret-store snapshot, which goes stale the moment
+    OpenCode rotates the token in place."""
+    write_live_account(tmp_path, account_id="acct-1", refresh="r1")
+    cli.main(["add", "openai", "work"])
+    capsys.readouterr()
+
+    data_root = tmp_path / "opencode-swap"
+    switcher = Switcher(opencode_auth_path=auth_path(tmp_path), data_root=data_root, platform=Platform.UNKNOWN)
+    switcher.secrets.put(
+        "openai:work",
+        json.dumps(
+            {
+                "type": "oauth",
+                "refresh": "stale-refresh",
+                "access": make_jwt({"chatgpt_account_id": "acct-1"}),
+                "expires": int((time.time() - 3600) * 1000),
+                "accountId": "acct-1",
+            }
+        ),
+    )
+
+    assert cli.main(["list"]) == 0
+    out = capsys.readouterr().out
+    assert "(expired)" not in out
+
+
+def test_refresh_no_saved_accounts(capsys):
+    assert cli.main(["refresh", "openai"]) == 0
+    assert "No saved accounts" in capsys.readouterr().out
+
+
+def test_refresh_unknown_account_reports_error_without_aborting_other_accounts(tmp_path, capsys):
+    write_live_account(tmp_path, account_id="acct-1")
+    cli.main(["add", "openai", "work"])
+    capsys.readouterr()
+
+    exit_code = cli.main(["refresh", "openai", "ghost"])
+    err_and_out = "".join(capsys.readouterr())
+    assert exit_code == 1
+    assert "no such account" in err_and_out
+
+
+def test_refresh_reports_ok_when_token_already_valid(tmp_path, capsys):
+    write_live_account(tmp_path, account_id="acct-1")
+    cli.main(["add", "openai", "work"])
+    capsys.readouterr()
+
+    assert cli.main(["refresh", "openai", "work"]) == 0
+    out = capsys.readouterr().out
+    assert "work" in out
+    assert "ok" in out
+
+
+def test_refresh_all_accounts_for_provider_when_name_omitted(tmp_path, capsys):
+    write_live_account(tmp_path, account_id="acct-1")
+    cli.main(["add", "openai", "a"])
+    write_live_account(tmp_path, account_id="acct-2")
+    cli.main(["add", "openai", "b"])
+    capsys.readouterr()
+
+    assert cli.main(["refresh", "openai"]) == 0
+    out = capsys.readouterr().out
+    assert "a" in out
+    assert "b" in out
+
+
+def test_refresh_never_prints_secrets(tmp_path, capsys, monkeypatch):
+    secret = "super-secret-rotated-refresh-token"
+    write_live_account(tmp_path, account_id="acct-1", refresh="r1")
+    cli.main(["add", "openai", "work"])
+    capsys.readouterr()
+
+    data_root = tmp_path / "opencode-swap"
+    switcher = Switcher(opencode_auth_path=auth_path(tmp_path), data_root=data_root, platform=Platform.UNKNOWN)
+    switcher.secrets.put(
+        "openai:work",
+        json.dumps(
+            {
+                "type": "oauth",
+                "refresh": "expired-refresh",
+                "access": make_jwt({"chatgpt_account_id": "acct-1"}),
+                "expires": int((time.time() - 3600) * 1000),
+                "accountId": "acct-1",
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        "opencode_swap.providers.openai.oauth_refresh.refresh_openai_oauth",
+        lambda refresh_token, **k: RefreshedTokens(access="new-access", refresh=secret, expires=(time.time() + 3600) * 1000, account_id="acct-1"),
+    )
+
+    cli.main(["refresh", "openai", "work"])
+    assert secret not in "".join(capsys.readouterr())
+
+
+def test_refresh_reports_ambiguous_state_distinctly_and_exits_nonzero(tmp_path, capsys, monkeypatch):
+    """Regression: an ambiguous live state (here, an in-flight unstable-to-
+    stable identity transition for the live-active account) must not be
+    reported with the same "no standalone refresh available for this
+    account type" message used for providers/types that genuinely have no
+    standalone refresh -- OpenAI oauth accounts do support it; this one was
+    merely skipped because live ownership couldn't be confirmed."""
+    unstable_access = make_jwt({})  # no chatgpt_account_id claim -> unstable identity
+    write_live_account(tmp_path, extra=None)
+    auth = json.loads(auth_path(tmp_path).read_text())
+    auth["openai"] = {"type": "oauth", "refresh": "r1", "access": unstable_access, "expires": int((time.time() + 3600) * 1000)}
+    auth_path(tmp_path).write_text(json.dumps(auth))
+    cli.main(["add", "openai", "work"])
+    capsys.readouterr()
+
+    # OpenCode rotates in place: the new live token gains a stable accountId claim.
+    stable_access = make_jwt({"chatgpt_account_id": "acct-x"})
+    auth_path(tmp_path).write_text(
+        json.dumps({"openai": {"type": "oauth", "refresh": "r2-rotated", "access": stable_access, "expires": int((time.time() + 3600) * 1000)}})
+    )
+
+    data_root = tmp_path / "opencode-swap"
+    switcher = Switcher(opencode_auth_path=auth_path(tmp_path), data_root=data_root, platform=Platform.UNKNOWN)
+    switcher.secrets.put(
+        "openai:work",
+        json.dumps({"type": "oauth", "refresh": "r1", "access": unstable_access, "expires": int((time.time() - 3600) * 1000)}),
+    )
+
+    def fail_if_called(*a, **k):
+        raise AssertionError("must not standalone-refresh during an identity transition")
+
+    monkeypatch.setattr("opencode_swap.providers.openai.oauth_refresh.refresh_openai_oauth", fail_if_called)
+
+    exit_code = cli.main(["refresh", "openai", "work"])
+    out = capsys.readouterr().out
+    assert exit_code == 1
+    assert "no standalone refresh available for this account type" not in out
+    assert "could not be confirmed" in out
 
 
 def test_format_usage_shows_days_and_reset_time(monkeypatch):

@@ -39,3 +39,6 @@ class ApiProvider:
 
     def validate(self, record: AuthRecord) -> Validity:
         return Validity.OK if record.type == "api" else Validity.INVALID
+
+    def refresh(self, record: AuthRecord) -> AuthRecord | None:
+        return None  # API keys don't expire/rotate; nothing to refresh

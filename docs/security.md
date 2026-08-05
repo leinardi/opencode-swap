@@ -27,6 +27,34 @@ or memory scraping. This boundary is deliberate, not an oversight: matching
 OpenCode's own trust boundary is the honest target; claiming more would be
 false security.
 
+### Network calls
+
+`opencode-swap` is local/offline-only except for two opt-in exceptions, both
+gated behind an explicit CLI flag or subcommand — never triggered by a plain
+`list`/`status`/`current`:
+
+- `usage.py` — `GET https://chatgpt.com/backend-api/wham/usage`, only from
+  `list --usage`/`status --usage`, sending a saved account's access token as
+  Bearer auth.
+- `oauth_refresh.py` — `POST https://auth.openai.com/oauth/token`, from
+  `list --usage`/`status --usage` (only for a saved account that isn't the
+  one OpenCode currently has live and whose stored token has expired) and
+  from the explicit `refresh` command, sending a saved account's refresh
+  token.
+
+**Rotation-loss window.** OpenAI issues a new refresh token on every grant
+and invalidates the old one. `Switcher._ensure_refreshed` persists the
+rotated token to the secret store immediately after the grant succeeds, and
+holds `self.lock` for the whole refresh+persist sequence so two concurrent
+`opencode-swap` invocations can't spend the same single-use token. The
+residual risk is a crash or `SIGKILL` between the grant completing and the
+`secrets.put` call landing: the old token is already dead, the new one is
+lost, and the account needs `opencode auth login` + `opencode-swap add`
+again. This window is real but narrow (no network I/O in between, no
+partial-write hazard beyond that already covered by `store.py`'s own atomic
+writes) and is not mitigated further, the same tradeoff `use_account`'s
+sync-back already accepts for OpenCode's own in-place rotation.
+
 ## Storage backend comparison
 
 | Approach | Linux | macOS | Headless Linux | Dependencies | If unavailable |

@@ -21,7 +21,7 @@ from opencode_swap.exceptions import AuthFileError, BackupError, OpenCodeSwapErr
 from opencode_swap.models import ImportConflictAction, Validity
 from opencode_swap.providers import get_provider
 from opencode_swap.store import RecordLocation
-from opencode_swap.switcher import Switcher
+from opencode_swap.switcher import AccountRefreshResult, RefreshOutcome, Switcher
 from opencode_swap.usage import UsageSnapshot
 
 
@@ -65,6 +65,10 @@ def _build_parser() -> argparse.ArgumentParser:
     switch_p = subparsers.add_parser("switch", help="switch to the next saved account for a provider")
     switch_p.add_argument("provider", help="OpenCode provider id")
     switch_p.add_argument("-y", "--yes", action="store_true", help="don't prompt for confirmation")
+
+    refresh_p = subparsers.add_parser("refresh", help="ensure a saved account's OAuth token is valid, refreshing over the network if it's expired")
+    refresh_p.add_argument("provider", help="OpenCode provider id")
+    refresh_p.add_argument("name", nargs="?", help="saved account name (every saved account for this provider if omitted)")
 
     remove_p = subparsers.add_parser("remove", help="remove a saved account")
     remove_p.add_argument("provider", help="OpenCode provider id")
@@ -167,10 +171,13 @@ def cmd_list(switcher: Switcher, args: argparse.Namespace) -> int:
         meta = accounts[(provider_id, name)]
         active = active_by_provider[provider_id]
         marker = "*" if active is not None and name == active.name else " "
+        # Fetch usage (which may refresh and persist a rotated token) before
+        # reading validity, so a successful --usage refresh is reflected in
+        # the validity tag on the same line rather than showing a stale
+        # "(expired)" next to freshly-fetched numbers.
+        usage_suffix = _format_usage(switcher.fetch_usage(name, provider_id=provider_id)) if args.usage else ""
         validity = switcher.account_validity(name, provider_id=provider_id)
-        line = f"{marker} {provider_id:<22} {name:<20} {_redact_account_id(meta.account_id):<8} {meta.email or '-':<28}{validity_tag[validity]}"
-        if args.usage:
-            line += _format_usage(switcher.fetch_usage(name, provider_id=provider_id))
+        line = f"{marker} {provider_id:<22} {name:<20} {_redact_account_id(meta.account_id):<8} {meta.email or '-':<28}{validity_tag[validity]}{usage_suffix}"
         print(line)
     return 0
 
@@ -406,6 +413,52 @@ def cmd_switch(switcher: Switcher, args: argparse.Namespace) -> int:
     return 0
 
 
+def _refresh_result_tag(result: AccountRefreshResult) -> tuple[str, bool]:
+    """(message, is_error). EXPIRED collapses three distinct reasons that
+    call for different messages: this account's provider/type has no
+    standalone refresh at all (`NO_SUPPORT`, expected and not an error) vs.
+    this one genuinely supports refresh but it was deliberately skipped --
+    either because OpenCode itself owns this account's refresh (`LIVE`) or
+    because live account state couldn't be safely verified this time
+    (`AMBIGUOUS`, worth retrying, reported as an error)."""
+    if result.validity == Validity.INVALID:
+        return "invalid", True
+    if result.validity == Validity.OK:
+        return "ok", False
+    if result.outcome is RefreshOutcome.NO_SUPPORT:
+        return "still expired (no standalone refresh available for this account type)", False
+    if result.outcome is RefreshOutcome.LIVE:
+        return "still expired (OpenCode refreshes this account on its next request)", False
+    if result.outcome is RefreshOutcome.AMBIGUOUS:
+        return "still expired (live account state could not be confirmed; refresh skipped, try again)", True
+    return "still expired", True
+
+
+def cmd_refresh(switcher: Switcher, args: argparse.Namespace) -> int:
+    if args.name:
+        names = [args.name]
+    else:
+        accounts = switcher.registry.scoped_accounts(args.provider)
+        names = sorted(name for (provider_id, name) in accounts if provider_id == args.provider)
+    if not names:
+        print(f"No saved accounts for provider '{args.provider}'.")
+        return 0
+
+    exit_code = 0
+    for name in names:
+        try:
+            result = switcher.refresh_account(name, provider_id=args.provider)
+        except OpenCodeSwapError as exc:
+            print(f"{args.provider:<22} {name:<20} {exc}")
+            exit_code = 1
+            continue
+        tag, is_error = _refresh_result_tag(result)
+        if is_error:
+            exit_code = 1
+        print(f"{args.provider:<22} {name:<20} {tag}")
+    return exit_code
+
+
 def cmd_remove(switcher: Switcher, args: argparse.Namespace) -> int:
     if not _confirm(f"Remove saved account '{args.provider}:{args.name}'?", args.yes):
         print("Aborted.", file=sys.stderr)
@@ -548,6 +601,7 @@ _HANDLERS = {
     "status": cmd_status,
     "use": cmd_use,
     "switch": cmd_switch,
+    "refresh": cmd_refresh,
     "remove": cmd_remove,
     "rename": cmd_rename,
     "export": cmd_export,

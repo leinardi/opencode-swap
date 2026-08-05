@@ -25,6 +25,18 @@
 
 ## Known gaps
 
+- **Standalone OAuth refresh is limited to OpenAI, and only reachable through
+  `list --usage`/`status --usage`/the explicit `refresh` command.**
+  `oauth_refresh.py` couples to OpenCode's private `client_id`
+  (`docs/opencode-auth.md#loading-and-refresh`) by design, reusing the same
+  public PKCE grant OpenCode itself would make on its next request. It exists
+  because `fetch_usage`/`account_validity` need to tell "this account's token
+  is genuinely dead" from "this account just isn't the one OpenCode has live
+  right now" — the latter is resolved for free by preferring the live
+  `auth.json` record over the stored snapshot (see
+  `Switcher._live_attribution`), never by a network call. No other command
+  triggers a refresh, and the account currently active in OpenCode is never
+  refreshed this way — OpenCode owns that refresh on its own next request.
 - **No Windows support.** `locking.py` is POSIX-only (`fcntl`), and the
   storage backend comparison in [`docs/security.md`](security.md) only
   covers Linux and macOS. Windows support will only happen if volunteers

@@ -19,6 +19,7 @@ from __future__ import annotations
 import math
 import time
 
+from opencode_swap import oauth_refresh
 from opencode_swap.exceptions import SchemaError
 from opencode_swap.models import AccountDesc, AuthRecord, JsonObject, Validity
 from opencode_swap.oauth_jwt import decode_claims, extract_account_id, extract_email
@@ -159,3 +160,19 @@ class OpenAiProvider:
         if record.type in ("api", "wellknown"):
             return Validity.OK
         return Validity.INVALID
+
+    def refresh(self, record: AuthRecord) -> AuthRecord | None:
+        if record.type != "oauth":
+            return None
+        refresh_token = record.raw.get("refresh")
+        if not isinstance(refresh_token, str) or not refresh_token:
+            raise SchemaError("openai oauth entry missing/invalid field 'refresh'")
+        tokens = oauth_refresh.refresh_openai_oauth(refresh_token, now_ms=time.time() * 1000)
+        new_raw = dict(record.raw)
+        new_raw["access"] = tokens.access
+        new_raw["refresh"] = tokens.refresh
+        new_raw["expires"] = tokens.expires
+        account_id = tokens.account_id or record.raw.get("accountId")
+        if account_id:
+            new_raw["accountId"] = account_id
+        return AuthRecord(type="oauth", raw=new_raw)

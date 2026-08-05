@@ -55,3 +55,6 @@ class XaiProvider:
         if not is_json_number(expires):
             return Validity.INVALID
         return Validity.EXPIRED if expires < time.time() * 1000 else Validity.OK
+
+    def refresh(self, record: AuthRecord) -> AuthRecord | None:
+        return None  # no verified standalone refresh flow for this provider yet

@@ -12,6 +12,8 @@ import time
 
 import pytest
 
+from opencode_swap import oauth_refresh
+from opencode_swap.exceptions import RefreshError
 from opencode_swap.models import Platform
 from opencode_swap.switcher import Switcher
 from tests.helpers import make_jwt
@@ -128,3 +130,79 @@ def test_many_concurrent_switches_leave_consistent_final_state(paths):
     final = json.loads(auth_path.read_text())  # must parse cleanly
     assert final["openai"]["accountId"] in ("acct-a", "acct-b")
     assert list(auth_path.parent.glob(".auth.*.tmp")) == []
+
+
+def test_concurrent_refreshes_spend_the_single_use_refresh_token_once(paths, monkeypatch):
+    """OpenAI issues a new refresh token on every grant and invalidates the
+    old one. Two callers racing to refresh the same expired account must
+    serialize: the second must observe the first's rotated record (via
+    Switcher._ensure_refreshed's lock + re-read-after-acquire) rather than
+    both spending the same now-superseded token."""
+    auth_path, data_root = paths
+    setup = make_switcher(auth_path, data_root)
+    write_auth(auth_path, oauth_entry("acct-a", "original-refresh"))
+    setup.add_account("a")
+    setup.secrets.put(
+        "openai:a",
+        json.dumps(
+            {
+                "type": "oauth",
+                "refresh": "original-refresh",
+                "access": make_jwt({"chatgpt_account_id": "acct-a"}),
+                "expires": int((time.time() - 3600) * 1000),
+                "accountId": "acct-a",
+            }
+        ),
+    )
+    # "a" must NOT be the account OpenCode currently has live -- refresh_account
+    # never spends a live-owned account's refresh token (see switcher.py's
+    # _ensure_refreshed). Switching the live file to a different account is
+    # what forces the stored-record refresh path this test actually targets.
+    write_auth(auth_path, oauth_entry("acct-b", "rb"))
+    setup.add_account("b")
+
+    spent_tokens = []
+    spent_lock = threading.Lock()
+
+    def fake_refresh(refresh_token, **kwargs):
+        with spent_lock:
+            if refresh_token in spent_tokens:
+                raise RefreshError(f"refresh token {refresh_token!r} already spent")
+            spent_tokens.append(refresh_token)
+        return oauth_refresh.RefreshedTokens(
+            access=f"access-for-{refresh_token}",
+            refresh=f"rotated-from-{refresh_token}",
+            expires=(time.time() + 3600) * 1000,
+            account_id="acct-a",
+        )
+
+    monkeypatch.setattr(oauth_refresh, "refresh_openai_oauth", fake_refresh)
+
+    barrier = threading.Barrier(2)
+    results: dict[str, object] = {}
+
+    def worker(key):
+        switcher = make_switcher(auth_path, data_root)
+        switcher.lock.timeout = 5.0
+        barrier.wait()
+        try:
+            results[key] = switcher.refresh_account("a")
+        except Exception as exc:
+            results[key] = exc
+
+    t1 = threading.Thread(target=worker, args=("t1",))
+    t2 = threading.Thread(target=worker, args=("t2",))
+    t1.start()
+    t2.start()
+    t1.join(timeout=15)
+    t2.join(timeout=15)
+
+    assert not t1.is_alive()
+    assert not t2.is_alive()
+    for key, outcome in results.items():
+        assert not isinstance(outcome, Exception), f"{key} raised: {outcome}"
+
+    # The original token was spent exactly once, never twice.
+    assert spent_tokens == ["original-refresh"]
+    final = json.loads(setup.secrets.get("openai:a"))
+    assert final["refresh"] == "rotated-from-original-refresh"

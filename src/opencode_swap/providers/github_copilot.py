@@ -37,3 +37,6 @@ class GitHubCopilotProvider:
 
     def validate(self, record: AuthRecord) -> Validity:
         return Validity.OK if record.type == "oauth" else Validity.INVALID
+
+    def refresh(self, record: AuthRecord) -> AuthRecord | None:
+        return None  # no verified standalone refresh flow for this provider yet

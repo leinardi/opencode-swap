@@ -8,8 +8,12 @@ is known). The response's rate_limit.primary_window carries used_percent,
 reset_at, and limit_window_seconds.
 
 No caching, no polling, no persistence, and never called unless the caller
-explicitly opts in — every other opencode-swap command is intentionally
-local/offline-only, and this is the one exception, kept opt-in on purpose.
+explicitly opts in -- every other opencode-swap command is intentionally
+local/offline-only. `oauth_refresh.py` (a standalone OAuth token refresh,
+triggered from inside `Switcher.fetch_usage`/`refresh_account` for a saved
+account OpenCode doesn't currently have live) is the only other exception;
+both are opt-in on purpose, one from `--usage`, the other from the explicit
+`refresh` command.
 
 The CLI itself only calls this with `--usage`. The bundled OpenCode TUI
 plugin (integrations/opencode-tui-plugin) is a different caller with its own

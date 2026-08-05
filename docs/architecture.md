@@ -191,6 +191,38 @@ overwritten, it would be gone for good, not just stale. This is why
 sync-back happens unconditionally on every `use`, not just when the caller
 asks for it.
 
+Reads sync back opportunistically too, not just `use`: `Switcher._ensure_refreshed`
+lets `fetch_usage`/`account_validity` prefer the live `auth.json` record for
+whichever account it can be positively attributed to via a genuine identity
+match (`_live_attribution` — deliberately *not* the registry's active-name
+hint used just above; that hint only ever justifies *refusing* an ambiguous
+live credential here, never accepting one, for the same reason `use_account`
+never treats it as proof of ownership), and captures a drifted live record
+into the secret store as a side effect of that read. This rescues a
+rotation that would otherwise sit unclaimed until the next `use`, and is
+also what stops a read from reporting a perfectly healthy active account as
+expired just because it predates that rotation. The live-check, sync-back,
+and any standalone refresh all happen inside one `self.lock` acquisition
+(see `_ensure_refreshed`'s docstring) so a concurrent `use_account` can
+never be caught mid-sync-back by a read that trusts a live snapshot
+computed before the lock was acquired, and so a standalone refresh (see
+below) can never fire for an account that became live-active while a
+caller was waiting for the lock.
+
+`_live_attribution` also reports *ambiguous* (distinct from "not live") in
+two cases, and a standalone refresh never fires in either: auth.json exists
+but can't be read or parsed (a genuinely absent file safely means "nothing
+live," but a present-and-unreadable one might still hold the account's live
+credential — the two must not be conflated), and an unmatched live record
+exists while the queried account is this provider's registry-active account
+with a matching type and an unstable stored identity (the shape of OpenCode
+rotating that account's token onto a new one that happens to gain a stable
+`accountId` claim the old one lacked — the stored identity, computed from
+the old claim, no longer matches, even though nothing is actually wrong).
+Both cases fall back to the stored record exactly as before, just without
+ever attempting a refresh — refreshing the stored copy there could spend a
+refresh token the live state has already superseded.
+
 ### Transaction and rollback
 
 `SwitchTransaction` records which steps completed

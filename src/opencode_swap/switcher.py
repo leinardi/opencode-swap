@@ -18,10 +18,11 @@ from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
+from enum import Enum, auto
 from pathlib import Path
 
 from opencode_swap import backup, opencode_auth, paths, transfer, usage
-from opencode_swap.exceptions import AccountExistsError, AuthFileError, OpenCodeSwapError, SchemaError
+from opencode_swap.exceptions import AccountExistsError, AuthFileError, OpenCodeSwapError, RefreshError, SchemaError
 from opencode_swap.locking import FileLock
 from opencode_swap.models import (
     AccountDesc,
@@ -66,6 +67,36 @@ def _same_orphan_record(provider: Provider, stored: AuthRecord, incoming: AuthRe
         return True
     stored_identity = provider.identity(stored)
     return stored_identity == provider.identity(incoming) and provider.identity_is_stable(stored)
+
+
+class RefreshOutcome(Enum):
+    """Why `Switcher._ensure_refreshed` did or didn't perform a standalone
+    refresh, for callers (currently `refresh_account`/the `refresh` CLI
+    command) that need to report an accurate reason rather than let a
+    caller-still-EXPIRED `Validity` alone imply the wrong one -- EXPIRED
+    from an ambiguous live state and EXPIRED from "this provider/type has
+    no standalone refresh at all" are different situations that call for
+    different messages.
+    """
+
+    LIVE = auto()  # resolved via live auth.json; OpenCode owns its own refresh, never attempted here
+    AMBIGUOUS = auto()  # live-ownership couldn't be verified; refresh skipped despite being supported
+    NO_SUPPORT = auto()  # this provider/record type has no standalone refresh at all (Provider.refresh returned None)
+    RESOLVED = auto()  # resolved from the stored record via normal means: already valid, or freshly refreshed
+
+
+@dataclass(frozen=True)
+class AccountRefreshResult:
+    """`Switcher.refresh_account`'s result: the account's resulting
+    validity, plus why (see `RefreshOutcome`) -- so a caller reporting
+    "still expired" can say whether that's because this provider/type has
+    no standalone refresh at all, or because the live account state
+    couldn't be safely verified this time (worth retrying), rather than
+    conflating the two under one misleading message.
+    """
+
+    validity: Validity
+    outcome: RefreshOutcome
 
 
 @dataclass
@@ -133,6 +164,147 @@ class Switcher:
             if provider.identity(record) == identity:
                 return name
         return None
+
+    def _live_attribution(self, provider_id: str, name: str) -> tuple[AuthRecord | None, bool]:
+        """Attempt to attribute the live OpenCode-auth.json record to the
+        saved account `name`. Returns `(live_record, ambiguous)`:
+
+        - `(record, False)`: attribution succeeded -- `record` is `name`'s
+          current live credential, more current than whatever
+          opencode-swap last captured into the secret store (OpenCode
+          rewrites auth.json in place on every token refresh; see
+          docs/opencode-auth.md#loading-and-refresh).
+        - `(None, False)`: there is definitely no live record to attribute
+          -- auth.json doesn't exist, or this provider has no live entry.
+          Safe to treat `name` as not currently live.
+        - `(None, True)`: attribution is ambiguous. Two distinct cases collapse
+          to this, both meaning "do not treat `name` as safe to
+          standalone-refresh":
+            1. auth.json exists but can't be read or parsed. A present-but-
+               unreadable file might still hold `name`'s live credential --
+               unlike a genuinely absent file, this is not proof of absence.
+            2. A live record exists whose identity matches no saved
+               account, `name` is this provider's registry-active account,
+               shares the live record's type, and `name`'s own stored
+               identity is unstable. This is the shape of an in-flight
+               unstable-to-stable identity transition (OpenCode rotated
+               `name`'s token and the new one happens to carry an
+               `accountId` claim the old one lacked) -- or an unrelated
+               foreign login. Either way, `name`'s stored refresh token may
+               already have been invalidated by whatever this rotation was.
+
+        Never accepts attribution through the registry's active-name hint
+        alone (case 2 above refuses, it never accepts): `use_account` only
+        ever uses that same hint to decide whether to *refuse* an ambiguous
+        live credential (stash it as unclaimed and raise, see its
+        ambiguous-identity branch) -- never to *accept* it as belonging to
+        the active account. A foreign OpenCode login with no stable
+        identity would otherwise be silently attributed to whatever account
+        the registry last recorded as active, and a caller that then syncs
+        it back (see `_ensure_refreshed`) would overwrite that account's
+        real stored credentials with the foreign one.
+        """
+        if not self.opencode_auth_path.exists():
+            return None, False
+        try:
+            live_record = self._read_live_record(provider_id)
+        except AuthFileError:
+            return None, True
+        if live_record is None:
+            return None, False
+
+        provider = self._provider(provider_id)
+        identity = provider.identity(live_record)
+        owner = self._find_by_identity(provider_id, identity)
+        if owner == name:
+            return live_record, False
+
+        if self.registry.get_active(provider_id) == name:
+            meta = self.registry.scoped_accounts().get((provider_id, name))
+            if meta is not None and meta.type == live_record.type:
+                stored_record = self._load_record(provider_id, name)
+                if stored_record is not None and not provider.identity_is_stable(stored_record):
+                    return None, True
+
+        return None, False
+
+    def _ensure_refreshed(self, provider_id: str, name: str, *, allow_refresh: bool) -> tuple[AuthRecord, RefreshOutcome] | None:
+        """The most current OAuth record attributable to saved account
+        `name`, as `(record, outcome)`. None if there's no live-owned or
+        stored record to resolve at all.
+
+        Live-attribution, sync-back, and any standalone refresh all happen
+        inside a single `self.lock` acquisition, and everything they act on
+        (live auth.json, the stored secret) is re-read fresh *after* the
+        lock is acquired rather than trusted from a value a caller computed
+        before waiting for the lock. Both properties matter for the same
+        reason: `use_account` (which also takes this lock) can splice a
+        rotated live credential into the secret store as part of its own
+        sync-back at any moment. Without re-checking under the lock, a
+        delayed caller here could either (a) attribute a *stale* cached live
+        snapshot to `name` and overwrite a newer sync-back `use_account` just
+        performed, permanently losing the freshest token, or (b) spend a
+        standalone refresh on `name`'s stored refresh token after `name`
+        became the live-active account, invalidating the very token
+        OpenCode itself is about to try to refresh with on its next
+        request.
+
+        Never triggers a standalone refresh for the account currently live
+        in OpenCode, regardless of `allow_refresh`: OpenCode owns that
+        refresh on its own next request (docs/opencode-auth.md#loading-and-refresh) --
+        reported as `RefreshOutcome.LIVE`. Also never refreshes when
+        `_live_attribution` reports the live state as ambiguous (auth.json
+        exists but couldn't be read, or `name` is the registry-active
+        account mid an unstable-to-stable identity transition) -- reported
+        as `RefreshOutcome.AMBIGUOUS`, distinct from `RefreshOutcome.NO_SUPPORT`
+        (this provider/record type has no standalone refresh at all): in
+        both ambiguous and live cases `name`'s stored refresh token might
+        already have been invalidated by whatever is currently live, so a
+        standalone refresh attempt here could either spend a token that's
+        about to be superseded anyway, or fail and misreport a perfectly
+        healthy, refreshable account as needing re-login. The stored record
+        (however stale it looks) is returned as-is instead. Callers must
+        not assume EXPIRED plus a lack of refresh means "unsupported" --
+        check `outcome`.
+
+        When `allow_refresh` is True, attribution isn't ambiguous, and the
+        resolved record is a stored (not live) copy that's expired,
+        refreshes it and persists the rotated token before returning
+        (`RefreshOutcome.RESOLVED`) -- serialized under the same lock so
+        two concurrent callers can never spend the same single-use refresh
+        token (OpenAI issues a new one on every grant and invalidates the
+        old one; see oauth_refresh.py): the stored record is re-read once
+        more immediately before refreshing, so a refresh a concurrent caller
+        just completed is picked up instead of spending a second,
+        already-superseded token. Raises RefreshError if a refresh was
+        attempted and the grant was rejected or the request failed.
+        """
+        provider = self._provider(provider_id)
+        with self.lock:
+            live_record, ambiguous = self._live_attribution(provider_id, name)
+            if live_record is not None:
+                key = _secret_key(provider_id, name)
+                stored = self.secrets.get(key)
+                if stored is None or json.loads(stored) != live_record.raw:
+                    self.secrets.put(key, json.dumps(live_record.raw))
+                return live_record, RefreshOutcome.LIVE
+
+            record = self._load_record(provider_id, name)
+            if record is None:
+                return None
+            if ambiguous:
+                return record, RefreshOutcome.AMBIGUOUS
+            if not allow_refresh or provider.validate(record) == Validity.OK:
+                return record, RefreshOutcome.RESOLVED
+            refreshed = provider.refresh(record)
+            if refreshed is None:
+                return record, RefreshOutcome.NO_SUPPORT
+            self.secrets.put(_secret_key(provider_id, name), json.dumps(refreshed.raw))
+            meta = self.registry.scoped_accounts().get((provider_id, name))
+            account_id = refreshed.raw.get("accountId")
+            if meta is not None and isinstance(account_id, str) and account_id and meta.account_id != account_id:
+                self.registry.upsert_account(replace(meta, account_id=account_id))
+            return refreshed, RefreshOutcome.RESOLVED
 
     def _read_live_record(self, provider_id: str) -> AuthRecord | None:
         """Read + extract the live provider record.
@@ -624,13 +796,43 @@ class Switcher:
         account has no OAuth record to look up usage for (e.g. an API-key
         account, or a secret store that's out of sync) -- this is a
         distinct "not applicable" case from usage.UsageSnapshot's own
-        available=False ("looked it up, the request failed")."""
+        available=False ("looked it up, the request failed").
+
+        Prefers OpenCode's own live auth.json over opencode-swap's stored
+        snapshot when the live record can be positively attributed to
+        `name` (see `_ensure_refreshed`) -- for whichever account is
+        currently active in OpenCode, the live copy is authoritative and
+        the stored copy is stale by construction. A drifted live record is
+        captured back into the secret store as a side effect. That account
+        is never refreshed standalone, live or expired: OpenCode owns that.
+
+        For any other saved account, refreshes its stored OAuth token on
+        demand when it's expired -- this is the one thing besides the
+        explicit `refresh` command that spends network quota and a
+        single-use refresh token, and only because the caller already
+        opted in with `--usage`.
+        """
         meta = self.registry.scoped_accounts().get((provider_id, name))
         if meta is None or meta.provider != "openai" or meta.type != "oauth":
             return None
-        record = self._load_record("openai", name)
-        if record is None:
+
+        try:
+            result = self._ensure_refreshed(provider_id, name, allow_refresh=True)
+        except RefreshError as exc:
+            return usage.UsageSnapshot(available=False, message=str(exc))
+        if result is None:
             return None
+        record, outcome = result
+
+        if self._provider(provider_id).validate(record) != Validity.OK:
+            if outcome is RefreshOutcome.LIVE:
+                message = "expired; OpenCode refreshes on next request"
+            elif outcome is RefreshOutcome.AMBIGUOUS:
+                message = "expired; live account state could not be confirmed, refresh skipped"
+            else:
+                message = "expired and no standalone refresh available for this account type"
+            return usage.UsageSnapshot(available=False, message=message)
+
         access = record.raw.get("access")
         if not isinstance(access, str):
             return None
@@ -642,14 +844,59 @@ class Switcher:
 
         INVALID here means the secret is missing or unreadable (e.g. deleted
         out-of-band from the secret store) — the registry entry is orphaned.
+
+        Prefers the live auth.json record when it can be positively
+        attributed to `name` (see `_ensure_refreshed`) — OpenCode rotates
+        tokens in `auth.json` in place, so the account currently active in
+        OpenCode may look expired in opencode-swap's stored snapshot while
+        the live copy is still perfectly valid. Never triggers a network
+        refresh: this is called unconditionally by `list`, with no separate
+        opt-in for a network call.
         """
         meta = self.registry.scoped_accounts().get((provider_id, name))
         if meta is None:
             raise OpenCodeSwapError(f"no such account: {name}")
-        record = self._load_record(meta.provider, name)
-        if record is None:
+        result = self._ensure_refreshed(provider_id, name, allow_refresh=False)
+        if result is None:
             return Validity.INVALID
+        record, _outcome = result
         return self._provider(meta.provider).validate(record)
+
+    def refresh_account(self, name: str, provider_id: str = "openai") -> AccountRefreshResult:
+        """Ensure a saved account's OAuth token is valid, refreshing it over
+        the network and persisting the rotated token if it's expired.
+
+        A no-op beyond the existence check when the token is already valid
+        -- refreshing a still-valid token would needlessly spend its
+        single-use refresh token for no benefit, which could break another
+        holder of the same account (e.g. a second OpenCode install). Never
+        refreshes the account currently active in OpenCode: that account's
+        validity is reported from its live `auth.json` record instead (see
+        `_ensure_refreshed`), since OpenCode owns its refresh on its own
+        next request.
+
+        Raises OpenCodeSwapError if the account doesn't exist or has no
+        stored credentials. Raises RefreshError if a refresh was attempted
+        and the grant was rejected or the request failed. Returns an
+        `AccountRefreshResult` — the resulting Validity (OK if the token is
+        now valid) alongside the `RefreshOutcome` explaining why, if it
+        isn't: `NO_SUPPORT` (this provider/record type has no standalone
+        refresh) is a different, unactionable-here situation from `LIVE`
+        or `AMBIGUOUS` (this account genuinely supports refresh, but it was
+        deliberately skipped this time) — callers must not collapse those
+        into the same "no refresh available" message.
+        """
+        provider_id = normalize_provider_id(provider_id)
+        name = normalize_account_name(name)
+        with self.lock:
+            self._sweep_secret_upgrades()
+            if self.registry.scoped_accounts().get((provider_id, name)) is None:
+                raise OpenCodeSwapError(f"no such account: {name}")
+        result = self._ensure_refreshed(provider_id, name, allow_refresh=True)
+        if result is None:
+            raise OpenCodeSwapError(f"no stored credentials for '{name}' (secret store may be out of sync)")
+        record, outcome = result
+        return AccountRefreshResult(validity=self._provider(provider_id).validate(record), outcome=outcome)
 
     def next_account(self, provider_id: str = "openai") -> AccountMeta:
         """Return next saved account after the live managed account, wrapping around."""
