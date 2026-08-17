@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from opencode_swap.exceptions import SchemaError
 from opencode_swap.models import AccountDesc, AuthRecord, JsonObject, Validity
-from opencode_swap.providers.common import credential_values, extract_raw, validate_oauth
+from opencode_swap.providers.common import credential_values, extract_raw, published_raw, validate_oauth
 
 
 class GitHubCopilotProvider:
@@ -19,7 +19,7 @@ class GitHubCopilotProvider:
         return validate_oauth(raw, self.id)
 
     def splice(self, auth: JsonObject, record: AuthRecord) -> JsonObject:
-        return {**auth, self.id: dict(record.raw)}
+        return {**auth, self.id: published_raw(record.raw)}
 
     def identity(self, record: AuthRecord) -> str:
         refresh = record.raw.get("refresh")

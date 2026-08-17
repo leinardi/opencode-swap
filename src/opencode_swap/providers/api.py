@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from opencode_swap.exceptions import SchemaError
 from opencode_swap.models import AccountDesc, AuthRecord, JsonObject, Validity
-from opencode_swap.providers.common import credential_values, extract_raw, validate_api
+from opencode_swap.providers.common import credential_values, extract_raw, published_raw, validate_api
 
 
 class ApiProvider:
@@ -22,7 +22,7 @@ class ApiProvider:
     def splice(self, auth: JsonObject, record: AuthRecord) -> JsonObject:
         if record.type != "api":
             raise SchemaError(f"{self.id} auth type is not supported by opencode-swap")
-        return {**auth, self.id: dict(record.raw)}
+        return {**auth, self.id: published_raw(record.raw)}
 
     def identity(self, record: AuthRecord) -> str:
         key = record.raw.get("key")

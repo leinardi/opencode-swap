@@ -3,7 +3,7 @@
 Record shapes verified against OpenCode source
 (packages/opencode/src/auth/index.ts:14-33, the Oauth/Api/WellKnown union):
 
-    oauth:     {type:"oauth", refresh:str, access:str, expires:number,
+    oauth:     {type:"oauth", refresh:str, access:str, expires:int,
                 accountId?:str, enterpriseUrl?:str}
     api:       {type:"api", key:str, metadata?:dict}
     wellknown: {type:"wellknown", key:str, token:str}
@@ -23,7 +23,7 @@ from opencode_swap import oauth_refresh
 from opencode_swap.exceptions import SchemaError
 from opencode_swap.models import AccountDesc, AuthRecord, JsonObject, Validity
 from opencode_swap.oauth_jwt import decode_claims, extract_account_id, extract_email
-from opencode_swap.providers.common import credential_values, is_json_number, require_expiry
+from opencode_swap.providers.common import credential_values, is_json_number, published_raw, require_expiry
 
 PROVIDER_ID = "openai"
 
@@ -102,7 +102,7 @@ class OpenAiProvider:
 
     def splice(self, auth: JsonObject, record: AuthRecord) -> JsonObject:
         new_auth = dict(auth)
-        new_auth[PROVIDER_ID] = dict(record.raw)
+        new_auth[PROVIDER_ID] = published_raw(record.raw)
         return new_auth
 
     def identity(self, record: AuthRecord) -> str:

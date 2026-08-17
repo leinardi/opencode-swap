@@ -20,6 +20,16 @@ Unlike usage.py, this module raises on failure rather than returning an
 "unavailable" sentinel: a caller deciding whether an account's refresh
 token is dead (needs re-login) versus merely offline needs to be able to
 tell those apart.
+
+`expires` is an *integer* epoch-ms timestamp, not a float. OpenCode's auth
+schema types it as `NonNegativeInt` (auth/index.ts's Oauth class, via
+packages/schema/src/schema.ts's `Schema.Int`), and `Auth.all()` decodes
+with `Record.filterMap` -- an entry that fails to decode is silently
+dropped rather than reported. A fractional `expires` therefore makes
+OpenCode behave as if the provider were never logged in at all, which
+surfaces far from the cause (`auth.type` on an undefined record). OpenCode's
+own refresh builds this from `Date.now()`, which is always integral;
+`time.time() * 1000` is not, so the conversion happens here.
 """
 
 from __future__ import annotations
@@ -46,7 +56,7 @@ _DEFAULT_EXPIRES_IN = 3600  # codex.ts:372, `tokens.expires_in ?? 3600`
 class RefreshedTokens:
     access: str
     refresh: str
-    expires: float  # epoch ms
+    expires: int  # epoch ms, integral -- see module docstring
     account_id: str | None
 
 
@@ -138,6 +148,9 @@ def refresh_openai_oauth(refresh_token: str, *, now_ms: float, issuer: str = ISS
     return RefreshedTokens(
         access=access_token,
         refresh=new_refresh_token,
-        expires=expires,
+        # Truncate rather than round: an expiry that lands marginally early
+        # costs at most one extra refresh, while one that lands late would
+        # send a request with an already-dead access token.
+        expires=int(expires),
         account_id=_account_id_from_tokens(payload.get("id_token"), access_token),
     )

@@ -68,6 +68,20 @@ when logged in via ChatGPT OAuth, has this shape **(source,
 }
 ```
 
+`expires` is epoch milliseconds and must be an **integer** — the schema
+types it as `NonNegativeInt`, i.e. `Schema.Int` **(source,
+`packages/schema/src/schema.ts:4`)**, and OpenCode itself only ever builds
+it from `Date.now() + ...` **(source, `codex.ts:372`)**. A fractional value
+fails to decode, and `Auth.all()` filters undecodable entries out with
+`Record.filterMap` rather than raising **(source, `auth/index.ts:58-67`)** —
+so the provider simply disappears, and the first symptom is a downstream
+`auth.type` access on `undefined` **(source, `codex.ts:331`)**. Anything
+`opencode-swap` publishes must therefore be integral. `published_raw`
+(`providers/common.py`) enforces that in `Provider.splice`, the single path
+by which our content reaches `auth.json`; extraction stays verbatim, so a
+foreign record stashed by `backup.write_unclaimed` is preserved exactly as
+found. `doctor` flags a fractional value found in the live file.
+
 Two other shapes exist for provider keys **(source)**:
 `{"type": "api", "key": "...", "metadata"?: {...}}` for a manually-entered
 API key, and `{"type": "wellknown", "key": "...", "token": "..."}`. All

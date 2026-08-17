@@ -860,6 +860,28 @@ def test_doctor_reports_incompatible_schema(tmp_path, capsys):
     assert "INCOMPATIBLE" in capsys.readouterr().out
 
 
+def test_doctor_reports_fractional_expiry(tmp_path, capsys):
+    """A float `expires` parses fine here but makes OpenCode drop the entry
+    silently, so `doctor` must call it out rather than reporting OK."""
+    write_live_account(tmp_path, account_id="acct-1")
+    path = auth_path(tmp_path)
+    data = json.loads(path.read_text())
+    data["openai"]["expires"] = float(data["openai"]["expires"]) + 0.0754
+    path.write_text(json.dumps(data))
+
+    cli.main(["doctor"])
+    out = capsys.readouterr().out
+    assert "schema check: OK" in out  # opencode-swap itself still reads it
+    assert "'expires' is not an integer" in out
+    assert "opencode-swap use openai" in out
+
+
+def test_doctor_stays_quiet_for_an_integer_expiry(tmp_path, capsys):
+    write_live_account(tmp_path, account_id="acct-1")
+    cli.main(["doctor"])
+    assert "'expires' is not an integer" not in capsys.readouterr().out
+
+
 def test_data_dir_created_with_safe_permissions(tmp_path):
     write_live_account(tmp_path, account_id="acct-1")
     cli.main(["add", "openai", "work"])

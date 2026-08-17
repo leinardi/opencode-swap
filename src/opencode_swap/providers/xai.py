@@ -7,7 +7,7 @@ import time
 from opencode_swap.exceptions import SchemaError
 from opencode_swap.models import AccountDesc, AuthRecord, JsonObject, Validity
 from opencode_swap.oauth_jwt import decode_claims
-from opencode_swap.providers.common import credential_values, extract_raw, is_json_number, validate_api, validate_oauth
+from opencode_swap.providers.common import credential_values, extract_raw, is_json_number, published_raw, validate_api, validate_oauth
 
 
 class XaiProvider:
@@ -24,7 +24,7 @@ class XaiProvider:
         raise SchemaError("xai auth type is not supported by opencode-swap")
 
     def splice(self, auth: JsonObject, record: AuthRecord) -> JsonObject:
-        return {**auth, self.id: dict(record.raw)}
+        return {**auth, self.id: published_raw(record.raw)}
 
     def identity(self, record: AuthRecord) -> str:
         if record.type == "api":

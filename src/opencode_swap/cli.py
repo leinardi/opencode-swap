@@ -18,8 +18,9 @@ from pathlib import Path
 
 from opencode_swap import __version__, backup, opencode_auth, paths, process_detection
 from opencode_swap.exceptions import AuthFileError, BackupError, OpenCodeSwapError, SchemaError
-from opencode_swap.models import ImportConflictAction, Validity
+from opencode_swap.models import ImportConflictAction, JsonObject, Validity
 from opencode_swap.providers import get_provider
+from opencode_swap.providers.common import is_json_number
 from opencode_swap.store import RecordLocation
 from opencode_swap.switcher import AccountRefreshResult, RefreshOutcome, Switcher
 from opencode_swap.usage import UsageSnapshot
@@ -540,6 +541,29 @@ def cmd_restore(switcher: Switcher, args: argparse.Namespace) -> int:
     return 0
 
 
+def _fractional_expiry_warning(auth: JsonObject, provider_id: str) -> str | None:
+    """Report an `expires` OpenCode's schema would reject.
+
+    Checked against the raw auth.json value rather than an extracted
+    AuthRecord: `extract` reads verbatim and normalization only happens at
+    the publication boundary (`providers.common.published_raw`, used by
+    `Provider.splice`), so by extraction time the problem is invisible.
+    OpenCode types `expires` as `NonNegativeInt` and drops entries that
+    fail to decode without any error, so a fractional value looks exactly
+    like "this provider was never logged in".
+    """
+    raw = auth.get(provider_id)
+    if not isinstance(raw, dict) or raw.get("type") != "oauth":
+        return None
+    expires = raw.get("expires")
+    if not is_json_number(expires) or float(expires).is_integer():
+        return None
+    return (
+        f"  provider {provider_id!r}: 'expires' is not an integer — OpenCode silently ignores this entry; "
+        f"run `opencode-swap use {provider_id} <name>` to repair it"
+    )
+
+
 def cmd_doctor(switcher: Switcher, args: argparse.Namespace) -> int:
     print(f"OpenCode auth file: {switcher.opencode_auth_path}")
     print(f"  exists: {'yes' if switcher.opencode_auth_path.exists() else 'no'}")
@@ -556,6 +580,10 @@ def cmd_doctor(switcher: Switcher, args: argparse.Namespace) -> int:
                     get_provider(provider_id).extract(auth)
                 except (SchemaError, ValueError) as exc:
                     provider_statuses.append(f"  provider {provider_id!r}: UNSUPPORTED/INCOMPATIBLE: {exc}")
+                    continue
+                fractional_expiry = _fractional_expiry_warning(auth, provider_id)
+                if fractional_expiry is not None:
+                    provider_statuses.append(fractional_expiry)
         schema_status = "OK"
     except AuthFileError as exc:
         schema_status = f"UNREADABLE: {exc}"

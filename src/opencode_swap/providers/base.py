@@ -30,6 +30,12 @@ class Provider(Protocol):
         """Return a new auth.json dict with this provider's entry replaced.
 
         Does not mutate ``auth``; all other providers' keys are preserved.
+
+        Implementations must route the record through
+        ``providers.common.published_raw`` -- this is the only path by which
+        opencode-swap content reaches OpenCode, so it is where read-side
+        tolerance has to stop. ``test_every_provider_splice_publishes_an
+        _integer_expiry`` enforces this for every registered provider.
         """
         ...
 

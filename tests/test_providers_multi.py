@@ -4,7 +4,7 @@ import pytest
 
 from opencode_swap.exceptions import SchemaError
 from opencode_swap.models import Validity
-from opencode_swap.providers import get_provider
+from opencode_swap.providers import PROVIDERS, get_provider
 from tests.helpers import make_jwt
 
 FRACTIONAL_EXPIRY = 1_730_000_000_000.5
@@ -108,3 +108,21 @@ def test_xai_oauth_without_issuer_fails_closed():
     assert record is not None
     with pytest.raises(SchemaError, match="stable JWT subject"):
         provider.identity(record)
+
+
+@pytest.mark.parametrize("provider_id", sorted(PROVIDERS))
+def test_every_provider_splice_publishes_an_integer_expiry(provider_id):
+    """`splice` is the only path by which opencode-swap content reaches
+    OpenCode, and OpenCode drops entries whose `expires` is not an integer
+    without reporting it. A provider added later that forgets
+    `published_raw` fails here rather than silently unregistering itself
+    from OpenCode at runtime."""
+    provider = get_provider(provider_id)
+    entry = {"type": "oauth", "refresh": "token", "access": make_jwt({"chatgpt_account_id": "acct-1"}), "expires": FRACTIONAL_EXPIRY}
+    record = provider.extract({provider_id: entry})
+    assert record is not None
+
+    spliced = provider.splice({}, record)[provider_id]
+
+    assert spliced["expires"] == int(FRACTIONAL_EXPIRY)
+    assert isinstance(spliced["expires"], int)

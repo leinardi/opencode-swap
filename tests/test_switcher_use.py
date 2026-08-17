@@ -376,3 +376,44 @@ def test_failure_after_replacement_rolls_back_auth(switcher, monkeypatch):
 
     assert switcher.opencode_auth_path.read_text() == original  # rolled back, not left as b
     assert live_openai(switcher.opencode_auth_path)["accountId"] == "acct-a"
+
+
+FRACTIONAL_EXPIRY = 1_787_739_643_640.0754
+
+
+def test_switch_heals_a_stored_fractional_expiry(switcher):
+    """A record stored by an older version carries a float `expires`
+    (time.time() * 1000). OpenCode types `expires` as NonNegativeInt and
+    drops undecodable entries without an error, so splicing that float back
+    into auth.json makes the whole provider disappear from OpenCode. The
+    switch must write an integer instead, with no manual repair step.
+
+    `a` is made live first so the sync-back attributes the live record to
+    `a` and leaves `b`'s stored record alone -- switching to whichever
+    account is already live would re-capture the live record over the
+    injected one and exercise self-switch sync-back instead of activation
+    of a stored record.
+    """
+    _setup_two_accounts(switcher)  # leaves b live
+    switcher.use_account("a")
+    switcher.secrets.put("openai:b", json.dumps(oauth_entry(account_id="acct-b", refresh="rb", expires=FRACTIONAL_EXPIRY)))
+
+    switcher.use_account("b")
+
+    live = live_openai(switcher.opencode_auth_path)
+    assert live["accountId"] == "acct-b"  # the stored record really is the one that landed
+    assert live["expires"] == int(FRACTIONAL_EXPIRY)
+    assert isinstance(live["expires"], int)
+    assert '"expires": 1787739643640,' in switcher.opencode_auth_path.read_text()
+
+
+def test_switch_leaves_the_stored_fractional_expiry_in_place(switcher):
+    """Normalization is a publication step, not a rewrite of stored state:
+    only what OpenCode reads is constrained."""
+    _setup_two_accounts(switcher)
+    switcher.use_account("a")
+    switcher.secrets.put("openai:b", json.dumps(oauth_entry(account_id="acct-b", refresh="rb", expires=FRACTIONAL_EXPIRY)))
+
+    switcher.use_account("b")
+
+    assert json.loads(switcher.secrets.get("openai:b"))["expires"] == FRACTIONAL_EXPIRY

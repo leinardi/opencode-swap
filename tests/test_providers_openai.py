@@ -35,8 +35,30 @@ def test_extract_valid_oauth():
 
 
 def test_extract_accepts_finite_fractional_expiry():
+    """Extraction stays verbatim: it validates records we did not write, and
+    the live record it produces is what `backup.write_unclaimed` preserves.
+    Constraining the value is `splice`'s job -- see
+    `test_splice_publishes_an_integer_expiry`."""
     record = provider.extract({"openai": oauth_entry(expires=FRACTIONAL_EXPIRY)})
     assert record.raw["expires"] == FRACTIONAL_EXPIRY
+
+
+def test_splice_publishes_an_integer_expiry():
+    """OpenCode types `expires` as NonNegativeInt and drops entries that fail
+    to decode without reporting it, so a fractional value published into
+    auth.json makes the provider vanish from OpenCode entirely."""
+    record = provider.extract({"openai": oauth_entry(expires=FRACTIONAL_EXPIRY)})
+
+    spliced = provider.splice({}, record)["openai"]
+
+    assert spliced["expires"] == int(FRACTIONAL_EXPIRY)
+    assert isinstance(spliced["expires"], int)
+    assert record.raw["expires"] == FRACTIONAL_EXPIRY  # source record untouched
+
+
+def test_splice_leaves_an_already_integral_expiry_alone():
+    record = provider.extract({"openai": oauth_entry(expires=1_730_000_000_000)})
+    assert provider.splice({}, record)["openai"]["expires"] == 1_730_000_000_000
 
 
 def test_extract_valid_api():
@@ -49,6 +71,15 @@ def test_extract_valid_wellknown():
     auth = {"openai": {"type": "wellknown", "key": "k", "token": "t"}}
     record = provider.extract(auth)
     assert record.type == "wellknown"
+
+
+def test_splice_does_not_touch_expires_on_a_non_oauth_record():
+    """`published_raw`'s integer-`expires` constraint exists only because
+    OpenCode's Oauth schema requires it -- Api and WellKnown carry no such
+    field in that schema. An `expires` key on one of those types is unknown
+    data we must preserve exactly, not silently truncate."""
+    record = provider.extract({"openai": {"type": "api", "key": "sk-abc", "expires": FRACTIONAL_EXPIRY}})
+    assert provider.splice({}, record)["openai"]["expires"] == FRACTIONAL_EXPIRY
 
 
 def test_unknown_type_error_never_includes_untrusted_value():

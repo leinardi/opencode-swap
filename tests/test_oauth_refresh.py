@@ -38,7 +38,8 @@ def test_success_extracts_rotated_tokens_and_expiry(monkeypatch):
     result = oauth_refresh.refresh_openai_oauth("old-refresh", now_ms=1_000_000.0)
     assert result.access == "new-access"
     assert result.refresh == "new-refresh"
-    assert result.expires == 1_000_000.0 + 3600 * 1000
+    assert result.expires == 1_000_000 + 3600 * 1000
+    assert isinstance(result.expires, int)
 
 
 def test_expires_in_defaults_when_missing(monkeypatch):
@@ -85,6 +86,25 @@ def test_result_expires_is_always_finite(monkeypatch):
     monkeypatch.setattr(oauth_refresh.urllib.request, "urlopen", lambda *a, **k: FakeResponse(_payload(expires_in=3600)))
     result = oauth_refresh.refresh_openai_oauth("old-refresh", now_ms=1_000_000.0)
     assert oauth_refresh.math.isfinite(result.expires)
+
+
+def test_fractional_now_ms_still_yields_an_integer_expiry(monkeypatch):
+    """`time.time() * 1000` carries a sub-millisecond fraction. OpenCode's
+    auth schema types `expires` as NonNegativeInt and drops entries that
+    fail to decode without reporting it, so a fractional expiry makes the
+    whole provider vanish from OpenCode rather than raising anywhere."""
+    monkeypatch.setattr(oauth_refresh.urllib.request, "urlopen", lambda *a, **k: FakeResponse(_payload()))
+    result = oauth_refresh.refresh_openai_oauth("old-refresh", now_ms=1_000_000.4)
+    assert isinstance(result.expires, int)
+    assert result.expires == 1_000_000 + 3600 * 1000
+
+
+def test_fractional_expires_in_truncates_rather_than_rounding_up(monkeypatch):
+    """Truncation keeps the expiry from ever landing after the real one,
+    which would send a request with an already-dead access token."""
+    monkeypatch.setattr(oauth_refresh.urllib.request, "urlopen", lambda *a, **k: FakeResponse(_payload(expires_in=1.9999)))
+    result = oauth_refresh.refresh_openai_oauth("old-refresh", now_ms=0.0)
+    assert result.expires == 1999
 
 
 def test_account_id_from_id_token_preferred_over_access_token(monkeypatch):
