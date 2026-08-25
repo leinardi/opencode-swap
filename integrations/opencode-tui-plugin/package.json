@@ -1,6 +1,6 @@
 {
   "name": "@leinardi/opencode-swap",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "OpenCode TUI account switcher for opencode-swap",
   "type": "module",
   "license": "MIT",

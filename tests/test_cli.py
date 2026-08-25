@@ -9,7 +9,7 @@ from opencode_swap.exceptions import RegistryError
 from opencode_swap.models import AccountMeta, Platform
 from opencode_swap.oauth_refresh import RefreshedTokens
 from opencode_swap.switcher import Switcher
-from opencode_swap.usage import UsageSnapshot
+from opencode_swap.usage import UsageSnapshot, UsageWindow
 from tests.helpers import make_jwt
 
 
@@ -140,7 +140,9 @@ def test_list_usage_flag_shows_usage_line(tmp_path, monkeypatch, capsys):
 
     monkeypatch.setattr(
         "opencode_swap.switcher.usage.fetch_openai_oauth_usage",
-        lambda *a, **k: UsageSnapshot(available=True, used_percent=55, plan_name="ChatGPT Plus"),
+        lambda *a, **k: UsageSnapshot(
+            available=True, plan_name="ChatGPT Plus", windows=(UsageWindow(used_percent=55, reset_at=None, window_seconds=None),)
+        ),
     )
     cli.main(["list", "--usage"])
     out = capsys.readouterr().out
@@ -286,18 +288,42 @@ def test_refresh_reports_ambiguous_state_distinctly_and_exits_nonzero(tmp_path, 
     assert "could not be confirmed" in out
 
 
-def test_format_usage_shows_days_and_reset_time(monkeypatch):
+def test_format_usage_shows_both_windows(monkeypatch):
     monkeypatch.setattr(cli.time, "time", lambda: 1_751_310_000)
     output = cli._format_usage(
         UsageSnapshot(
             available=True,
-            used_percent=5,
-            reset_at=(1_751_310_000 + 7 * 86_400) * 1000,
+            windows=(
+                UsageWindow(used_percent=49, reset_at=(1_751_310_000 + 3 * 3600) * 1000, window_seconds=5 * 3600),
+                UsageWindow(used_percent=5, reset_at=(1_751_310_000 + 7 * 86_400) * 1000, window_seconds=7 * 86_400),
+            ),
         )
     )
 
-    assert output.startswith("  usage: 7d 5% @")
-    assert ", " in output
+    assert output.startswith("  usage: 5h 49% @")
+    assert " | 7d 5% @" in output
+    assert ", " in output.split(" | ")[1]
+
+
+def test_format_usage_reset_under_a_day_shows_time_only(monkeypatch):
+    monkeypatch.setattr(cli.time, "time", lambda: 1_751_310_000)
+    output = cli._format_usage(
+        UsageSnapshot(
+            available=True,
+            windows=(UsageWindow(used_percent=49, reset_at=(1_751_310_000 + 3600) * 1000, window_seconds=5 * 3600),),
+        )
+    )
+
+    # Reset under 24h away renders as bare "HH:MM", not a full date.
+    assert "," not in output
+
+
+@pytest.mark.parametrize(
+    ("window_seconds", "expected_label"),
+    [(3600, "1h"), (5 * 3600, "5h"), (86_400, "1d"), (7 * 86_400, "7d"), (None, None)],
+)
+def test_window_label_derives_from_duration(window_seconds, expected_label):
+    assert cli._window_label(window_seconds) == expected_label
 
 
 def test_list_usage_flag_never_prints_secrets(tmp_path, monkeypatch, capsys):
@@ -307,7 +333,7 @@ def test_list_usage_flag_never_prints_secrets(tmp_path, monkeypatch, capsys):
 
     monkeypatch.setattr(
         "opencode_swap.switcher.usage.fetch_openai_oauth_usage",
-        lambda *a, **k: UsageSnapshot(available=True, used_percent=10),
+        lambda *a, **k: UsageSnapshot(available=True, windows=(UsageWindow(used_percent=10, reset_at=None, window_seconds=None),)),
     )
     cli.main(["list", "--usage"])
     assert "super-secret-refresh-token" not in capsys.readouterr().out
@@ -350,7 +376,7 @@ def test_status_json_lists_managed_account_without_secret(tmp_path, capsys):
     output = capsys.readouterr().out
 
     assert json.loads(output) == {
-        "schema_version": 1,
+        "schema_version": 2,
         "providers": [
             {
                 "id": "openai",
@@ -410,10 +436,11 @@ def test_status_usage_fetches_only_active_managed_account(tmp_path, monkeypatch,
         calls.append(args)
         return UsageSnapshot(
             available=True,
-            used_percent=17,
             plan_name="ChatGPT Plus",
-            reset_at=1_750_000_000_000,
-            window_seconds=604800,
+            windows=(
+                UsageWindow(used_percent=49, reset_at=1_749_900_000_000, window_seconds=18_000),
+                UsageWindow(used_percent=17, reset_at=1_750_000_000_000, window_seconds=604_800),
+            ),
         )
 
     monkeypatch.setattr("opencode_swap.switcher.usage.fetch_openai_oauth_usage", fetch)
@@ -424,10 +451,11 @@ def test_status_usage_fetches_only_active_managed_account(tmp_path, monkeypatch,
     assert result["providers"][0]["usage"] == {
         "applicable": True,
         "available": True,
-        "used_percent": 17,
         "plan_name": "ChatGPT Plus",
-        "reset_at": 1_750_000_000_000,
-        "window_seconds": 604800,
+        "windows": [
+            {"used_percent": 49, "reset_at": 1_749_900_000_000, "window_seconds": 18_000},
+            {"used_percent": 17, "reset_at": 1_750_000_000_000, "window_seconds": 604_800},
+        ],
     }
 
 

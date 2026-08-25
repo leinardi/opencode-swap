@@ -25,7 +25,7 @@
 /** @jsxImportSource @opentui/solid */
 
 import type { TuiDialogSelectOption, TuiPlugin, TuiPluginApi, TuiPluginModule } from "@opencode-ai/plugin/tui";
-import { createEffect, createMemo, createSignal, on, onCleanup, onMount, Show, untrack } from "solid-js";
+import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show, untrack } from "solid-js";
 
 type Account = {
   name: string
@@ -38,12 +38,17 @@ type Active = {
   reason?: string
 }
 
-type Usage = {
-  applicable: boolean
-  available?: boolean
+type UsageWindow = {
   used_percent?: number
   reset_at?: number
   window_seconds?: number
+}
+
+type Usage = {
+  applicable: boolean
+  available?: boolean
+  plan_name?: string
+  windows?: UsageWindow[]
 }
 
 type ProviderStatus = {
@@ -111,7 +116,7 @@ async function run(options: Record<string, unknown> | undefined, args: string[])
 function status(value: unknown): Status {
   if (!value || typeof value !== "object") throw new Error("invalid status response");
   const result = value as Partial<Status>;
-  if (result.schema_version !== 1 || !Array.isArray(result.providers)) throw new Error("unsupported status response");
+  if (result.schema_version !== 2 || !Array.isArray(result.providers)) throw new Error("unsupported status response");
   return result as Status;
 }
 
@@ -154,36 +159,66 @@ function text(provider: ProviderStatus) {
   if (provider.active.state === "none") return "no active account";
   if (provider.active.state === "incompatible") return "incompatible account";
   // Defends against a future CLI adding a new `active.state` value under the
-  // same schema_version=1 (see cli.py's compatibility contract): an older
+  // same schema_version=2 (see cli.py's compatibility contract): an older
   // plugin build must degrade to this instead of rendering `undefined`.
   return provider.active.name ?? "unknown account state";
 }
 
-function usageDetails(provider: ProviderStatus) {
-  const usage = provider.usage;
-  if (!usage?.applicable || !usage.available || typeof usage.used_percent !== "number" || !Number.isFinite(usage.used_percent)) return;
+// Derives a short duration label ("5h", "7d", ...) straight from the
+// window's own length -- no table of known OpenAI windows, mirroring
+// cli.py's _window_label, so an unfamiliar or changed window length still
+// gets a sensible label.
+function windowLabel(windowSeconds: number | undefined): string | undefined {
+  if (typeof windowSeconds !== "number" || !Number.isFinite(windowSeconds) || windowSeconds <= 0) return undefined;
+  const units: [number, string][] = [
+    [86_400, "d"],
+    [3600, "h"],
+    [60, "m"],
+    [1, "s"]
+  ];
+  const [unitSeconds, suffix] = units.find(([seconds]) => windowSeconds >= seconds) ?? [1, "s"];
+  return `${Math.round(windowSeconds / unitSeconds)}${suffix}`;
+}
 
-  const percent = Math.round(usage.used_percent);
+type UsageDetail = { label?: string, percent: number, band: "green" | "yellow" | "orange" | "red", reset?: string }
+
+function usageWindowDetail(window: UsageWindow): UsageDetail | undefined {
+  if (typeof window.used_percent !== "number" || !Number.isFinite(window.used_percent)) return;
+
+  const percent = Math.round(window.used_percent);
   const absoluteBand = percent >= 90 ? "red" : percent >= 70 ? "orange" : percent >= 50 ? "yellow" : "green";
-  const resetAt = usage.reset_at;
-  if (typeof resetAt !== "number" || !Number.isFinite(resetAt)) return { percent, band: absoluteBand };
+  const label = windowLabel(window.window_seconds);
+  const resetAt = window.reset_at;
+  if (typeof resetAt !== "number" || !Number.isFinite(resetAt)) return { label, percent, band: absoluteBand };
 
-  const windowSeconds = usage.window_seconds;
+  const windowSeconds = window.window_seconds;
   let band: "green" | "yellow" | "orange" | "red" = absoluteBand;
   if (typeof windowSeconds === "number" && Number.isFinite(windowSeconds) && windowSeconds > 0) {
     const windowMs = windowSeconds * 1000;
     const elapsedPercent = ((windowMs - (resetAt - Date.now())) / windowMs) * 100;
     if (elapsedPercent < 5) band = "green";
     else if (elapsedPercent <= 100) {
-      const ratio = (usage.used_percent / elapsedPercent) * 100;
+      const ratio = (window.used_percent / elapsedPercent) * 100;
       band = ratio < 85 ? "green" : ratio < 105 ? "orange" : "red";
     }
   }
   const date = new Date(resetAt);
-  if (Number.isNaN(date.getTime())) return { percent, band };
+  if (Number.isNaN(date.getTime())) return { label, percent, band };
+  // Reset under 24h *in the future* renders as bare "HH:MM", matching
+  // cli.py's _format_reset; a past or non-finite delta always gets the full
+  // date so a stale/expired reset never reads as "today".
+  const hhmm = `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+  const deltaMs = resetAt - Date.now();
+  if (deltaMs >= 0 && deltaMs < 86_400_000) return { label, percent, band, reset: hhmm };
   const month = date.toLocaleString(undefined, { month: "short" });
-  const reset = `${month} ${date.getDate()}, ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
-  return { percent, band, reset };
+  return { label, percent, band, reset: `${month} ${date.getDate()}, ${hhmm}` };
+}
+
+function usageDetails(provider: ProviderStatus): UsageDetail[] | undefined {
+  const usage = provider.usage;
+  if (!usage?.applicable || !usage.available || !Array.isArray(usage.windows)) return;
+  const details = usage.windows.map(usageWindowDetail).filter((detail): detail is UsageDetail => detail !== undefined);
+  return details.length > 0 ? details : undefined;
 }
 
 function StatusView(props: {
@@ -262,10 +297,10 @@ function StatusView(props: {
               <Show when={provider()}>
                 {(value) => {
                   const usage = createMemo(() => usageDetails(value()));
-                  const usageColor = createMemo(() => {
+                  const colorFor = (band: UsageDetail["band"]) => {
                     const theme = props.api.theme.current;
                     const dracula = props.api.theme.selected.toLowerCase() === "dracula";
-                    switch (usage()?.band) {
+                    switch (band) {
                       case "red":
                         return theme.error;
                       case "orange":
@@ -275,7 +310,7 @@ function StatusView(props: {
                       default:
                         return theme.success;
                     }
-                  });
+                  };
                   return (
                       <>
                         <span style={{ fg: props.api.theme.current.text }}>{text(value())}</span>
@@ -283,8 +318,16 @@ function StatusView(props: {
                           {(details) => (
                               <>
                                 {" · "}
-                                <span style={{ fg: usageColor() }}>{details().percent}%</span>
-                                <Show when={details().reset}>{(reset) => <> @{reset()}</>}</Show>
+                                <For each={details()}>
+                                  {(detail, index) => (
+                                      <>
+                                        <Show when={index() > 0}>{" | "}</Show>
+                                        <Show when={detail.label}>{(label) => <>{label()} </>}</Show>
+                                        <span style={{ fg: colorFor(detail.band) }}>{detail.percent}%</span>
+                                        <Show when={detail.reset}>{(reset) => <> @{reset()}</>}</Show>
+                                      </>
+                                  )}
+                                </For>
                               </>
                           )}
                         </Show>

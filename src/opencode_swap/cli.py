@@ -23,7 +23,7 @@ from opencode_swap.providers import get_provider
 from opencode_swap.providers.common import is_json_number
 from opencode_swap.store import RecordLocation
 from opencode_swap.switcher import AccountRefreshResult, RefreshOutcome, Switcher
-from opencode_swap.usage import UsageSnapshot
+from opencode_swap.usage import UsageSnapshot, UsageWindow
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -183,37 +183,70 @@ def cmd_list(switcher: Switcher, args: argparse.Namespace) -> int:
     return 0
 
 
+def _window_label(window_seconds: object) -> str | None:
+    """Derive a short duration label ("5h", "7d", ...) straight from the
+    window's own length -- no table of known OpenAI windows, so a changed or
+    unfamiliar window length still gets a sensible label (see usage.py's
+    key-agnostic window discovery)."""
+    if not isinstance(window_seconds, (int, float)) or isinstance(window_seconds, bool):
+        return None
+    try:
+        valid = math.isfinite(window_seconds) and window_seconds > 0
+    except OverflowError:
+        valid = False
+    if not valid:
+        return None
+    unit_seconds, unit_suffix = next((s, suffix) for s, suffix in ((86_400, "d"), (3600, "h"), (60, "m"), (1, "s")) if window_seconds >= s)
+    return f"{round(window_seconds / unit_seconds)}{unit_suffix}"
+
+
+def _format_reset(reset_at: object) -> str | None:
+    if not isinstance(reset_at, (int, float)) or isinstance(reset_at, bool):
+        return None
+    try:
+        if not math.isfinite(reset_at):
+            return None
+    except OverflowError:
+        return None
+    try:
+        reset_time = datetime.fromtimestamp(reset_at / 1000)
+    except (OverflowError, OSError, ValueError):
+        return None
+    if 0 <= reset_at - time.time() * 1000 < 86_400_000:
+        return f"{reset_time:%H:%M}"
+    return f"{reset_time:%b} {reset_time.day}, {reset_time:%H:%M}"
+
+
+def _format_window(window: UsageWindow) -> str | None:
+    used_percent = window.used_percent
+    try:
+        valid_percent = isinstance(used_percent, (int, float)) and not isinstance(used_percent, bool) and math.isfinite(used_percent)
+    except OverflowError:
+        valid_percent = False
+    if not valid_percent:
+        return None
+    text = f"{used_percent:.0f}%"
+    label = _window_label(window.window_seconds)
+    if label:
+        text = f"{label} {text}"
+    reset = _format_reset(window.reset_at)
+    if reset:
+        text = f"{text} @{reset}"
+    return text
+
+
 def _format_usage(snapshot: UsageSnapshot | None) -> str:
     if snapshot is None:
         return "  usage: n/a"
     if not snapshot.available:
         return f"  usage: unavailable ({snapshot.message})"
-    try:
-        valid_percent = (
-            isinstance(snapshot.used_percent, (int, float)) and not isinstance(snapshot.used_percent, bool) and math.isfinite(snapshot.used_percent)
-        )
-    except OverflowError:
-        valid_percent = False
-    if not valid_percent:
+    parts = [text for window in snapshot.windows if (text := _format_window(window)) is not None]
+    if not parts:
         return "  usage: n/a"
-    parts = [f"{snapshot.used_percent:.0f}%"]
-    reset_at = snapshot.reset_at
-    if isinstance(reset_at, (int, float)) and not isinstance(reset_at, bool):
-        try:
-            valid_reset = math.isfinite(reset_at)
-        except OverflowError:
-            valid_reset = False
-        if valid_reset:
-            try:
-                days = math.ceil(max(0, reset_at - time.time() * 1000) / 86_400_000)
-                reset_time = datetime.fromtimestamp(reset_at / 1000)
-            except (OverflowError, OSError, ValueError):
-                pass
-            else:
-                parts[0] = f"{days}d {parts[0]} @{reset_time:%b} {reset_time.day}, {reset_time:%H:%M}"
+    windows_text = " | ".join(parts)
     if snapshot.plan_name:
-        parts.append(snapshot.plan_name)
-    return "  usage: " + ", ".join(parts)
+        windows_text = f"{windows_text}, {snapshot.plan_name}"
+    return "  usage: " + windows_text
 
 
 def _status_provider_ids(switcher: Switcher, provider_id: str | None, live_auth: dict[str, object]) -> list[str]:
@@ -225,6 +258,32 @@ def _status_provider_ids(switcher: Switcher, provider_id: str | None, live_auth:
     return sorted(provider_ids)
 
 
+def _status_usage_window(window: UsageWindow) -> dict[str, object] | None:
+    try:
+        valid_percent = (
+            isinstance(window.used_percent, (int, float)) and not isinstance(window.used_percent, bool) and math.isfinite(window.used_percent)
+        )
+        valid_reset = isinstance(window.reset_at, (int, float)) and not isinstance(window.reset_at, bool) and math.isfinite(window.reset_at)
+        valid_window = (
+            isinstance(window.window_seconds, (int, float))
+            and not isinstance(window.window_seconds, bool)
+            and math.isfinite(window.window_seconds)
+            and window.window_seconds > 0
+        )
+    except OverflowError:
+        valid_percent = False
+        valid_reset = False
+        valid_window = False
+    if not valid_percent:
+        return None
+    result: dict[str, object] = {"used_percent": window.used_percent}
+    if valid_reset:
+        result["reset_at"] = window.reset_at
+    if valid_window:
+        result["window_seconds"] = window.window_seconds
+    return result
+
+
 def _status_usage(snapshot: UsageSnapshot | None) -> dict[str, object]:
     if snapshot is None:
         return {"applicable": False}
@@ -234,31 +293,11 @@ def _status_usage(snapshot: UsageSnapshot | None) -> dict[str, object]:
         "available": snapshot.available,
     }
     if snapshot.available:
-        try:
-            valid_percent = (
-                isinstance(snapshot.used_percent, (int, float))
-                and not isinstance(snapshot.used_percent, bool)
-                and math.isfinite(snapshot.used_percent)
-            )
-            valid_reset = isinstance(snapshot.reset_at, (int, float)) and not isinstance(snapshot.reset_at, bool) and math.isfinite(snapshot.reset_at)
-            valid_window = (
-                isinstance(snapshot.window_seconds, (int, float))
-                and not isinstance(snapshot.window_seconds, bool)
-                and math.isfinite(snapshot.window_seconds)
-                and snapshot.window_seconds > 0
-            )
-        except OverflowError:
-            valid_percent = False
-            valid_reset = False
-            valid_window = False
-        if valid_percent:
-            result["used_percent"] = snapshot.used_percent
+        windows = [entry for window in snapshot.windows if (entry := _status_usage_window(window)) is not None]
+        if windows:
+            result["windows"] = windows
         if snapshot.plan_name:
             result["plan_name"] = snapshot.plan_name
-        if valid_reset:
-            result["reset_at"] = snapshot.reset_at
-        if valid_window:
-            result["window_seconds"] = snapshot.window_seconds
     return result
 
 
@@ -288,6 +327,12 @@ def _status_payload(switcher: Switcher, provider_id: str | None, include_usage: 
     TUI plugin (a separately-versioned npm package that can trail the CLI),
     must tolerate unknown `state` values and unknown fields rather than
     assuming the set present at the time they were written is exhaustive.
+
+    `schema_version` went 1 -> 2 when OpenAI added a second (5h) rate-limit
+    window: the flat `usage.used_percent`/`reset_at`/`window_seconds` fields
+    were replaced by `usage.windows` (a list of the same three fields, one
+    entry per window) since a single flat field can no longer represent both
+    windows -- an actual removal/repurposing, not an addition.
     """
     accounts = switcher.registry.scoped_accounts(provider_id)
     live_auth = opencode_auth.read_auth(switcher.opencode_auth_path) if switcher.opencode_auth_path.exists() else {}
@@ -320,7 +365,43 @@ def _status_payload(switcher: Switcher, provider_id: str | None, include_usage: 
         if include_usage and current is not None:
             entry["usage"] = _status_usage(switcher.fetch_usage(current.name, provider_id=current_provider_id))
         providers.append(entry)
-    return {"schema_version": 1, "providers": providers}
+    return {"schema_version": 2, "providers": providers}
+
+
+def _format_status_usage(usage_snapshot: dict[str, object]) -> str:
+    """Render the `usage` block of a `status --json` payload entry as text,
+    for `status`'s non-JSON output. Takes the already-built JSON dict (not a
+    `UsageSnapshot`) since `cmd_status` only has the payload dict in hand;
+    reuses `_window_label`/`_format_reset` so the two commands' text output
+    stays in sync."""
+    if not usage_snapshot.get("applicable"):
+        return "  usage: n/a"
+    if not usage_snapshot.get("available"):
+        return "  usage: unavailable"
+    windows = usage_snapshot.get("windows")
+    parts: list[str] = []
+    if isinstance(windows, list):
+        for window in windows:
+            if not isinstance(window, dict):
+                continue
+            used_percent = window.get("used_percent")
+            if not isinstance(used_percent, (int, float)) or isinstance(used_percent, bool):
+                continue
+            text = f"{used_percent:.0f}%"
+            label = _window_label(window.get("window_seconds"))
+            if label:
+                text = f"{label} {text}"
+            reset = _format_reset(window.get("reset_at"))
+            if reset:
+                text = f"{text} @{reset}"
+            parts.append(text)
+    if not parts:
+        return "  usage: n/a"
+    windows_text = " | ".join(parts)
+    plan_name = usage_snapshot.get("plan_name")
+    if isinstance(plan_name, str) and plan_name:
+        windows_text = f"{windows_text}, {plan_name}"
+    return "  usage: " + windows_text
 
 
 def cmd_status(switcher: Switcher, args: argparse.Namespace) -> int:
@@ -347,12 +428,7 @@ def cmd_status(switcher: Switcher, args: argparse.Namespace) -> int:
             line = f"{provider_id}: no active account"
         usage_snapshot = provider.get("usage")
         if isinstance(usage_snapshot, dict):
-            if not usage_snapshot.get("applicable"):
-                line += "  usage: n/a"
-            elif not usage_snapshot.get("available"):
-                line += "  usage: unavailable"
-            elif "used_percent" in usage_snapshot:
-                line += f"  usage: {usage_snapshot['used_percent']:.0f}%"
+            line += _format_status_usage(usage_snapshot)
         print(line)
     return 0
 

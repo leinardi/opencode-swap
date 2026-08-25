@@ -4,8 +4,22 @@ Verified against opencode-balancer's implementation
 (src/core/usage/providers/openai.ts), not guessed: for an OAuth account, GET
 https://chatgpt.com/backend-api/wham/usage with the account's own access
 token as Bearer auth (plus a ChatGPT-Account-Id header when the account id
-is known). The response's rate_limit.primary_window carries used_percent,
-reset_at, and limit_window_seconds.
+is known). The response's `rate_limit` dict carries one or more rate-limit
+windows -- OpenAI added a 5-hour window alongside the pre-existing 7-day one
+in 2026-08, each shaped the same: `used_percent`, `reset_at`,
+`limit_window_seconds`.
+
+Third-party clients of this same endpoint (surveyed on GitHub while adding
+the 5h window here) do NOT agree on which key holds which window --
+`primary_window`/`secondary_window` is observed both ways round, classified
+only by `limit_window_seconds` (18000 = 5h, 604800 = 7d). So this module
+never keys into `rate_limit` by name: it walks every value under
+`rate_limit`, keeps whatever parses as a window (dict with a usable
+`used_percent`), and sorts what it finds by `limit_window_seconds`. That
+also means it survives OpenAI going back to one window, adding a third, or
+renaming the keys again, with no code change here -- and it naturally skips
+sibling blocks like `code_review_rate_limit` (a separate quota some clients
+also parse) since those aren't inside `rate_limit`.
 
 No caching, no polling, no persistence, and never called unless the caller
 explicitly opts in -- every other opencode-swap command is intentionally
@@ -44,12 +58,17 @@ _PLAN_NAMES = {
 
 
 @dataclass(frozen=True)
+class UsageWindow:
+    used_percent: float | None
+    reset_at: float | None  # epoch ms
+    window_seconds: float | None
+
+
+@dataclass(frozen=True)
 class UsageSnapshot:
     available: bool
-    used_percent: float | None = None
     plan_name: str | None = None
-    reset_at: float | None = None  # epoch ms
-    window_seconds: float | None = None
+    windows: tuple[UsageWindow, ...] = ()
     message: str = ""
 
 
@@ -73,6 +92,46 @@ def _reset_at_millis(value: object) -> float | None:
     return millis if millis <= _MAX_RESET_AT_MILLIS else None
 
 
+def _parse_window(value: object) -> UsageWindow | None:
+    """Parse one candidate rate-limit window. Returns None when `value` isn't
+    dict-shaped or has no usable `used_percent` -- the two signals used to
+    tell an actual window apart from an unrelated `rate_limit` entry (see
+    module docstring on key-agnostic discovery)."""
+    if not isinstance(value, dict):
+        return None
+
+    used_percent = value.get("used_percent")
+    valid_percent = (
+        isinstance(used_percent, (int, float))
+        and not isinstance(used_percent, bool)
+        and (not isinstance(used_percent, float) or math.isfinite(used_percent))
+        and 0 <= used_percent <= 100
+    )
+    if not valid_percent:
+        return None
+
+    window_seconds = value.get("limit_window_seconds")
+    valid_window = (
+        isinstance(window_seconds, (int, float))
+        and not isinstance(window_seconds, bool)
+        and (not isinstance(window_seconds, float) or math.isfinite(window_seconds))
+        and window_seconds > 0
+    )
+    return UsageWindow(
+        used_percent=used_percent,
+        reset_at=_reset_at_millis(value.get("reset_at")),
+        window_seconds=window_seconds if valid_window else None,
+    )
+
+
+def _sort_key(item: tuple[str, UsageWindow]) -> tuple[float, str]:
+    key, window = item
+    # Windows with no usable duration sort last (inf); ties (including two
+    # unknown-duration windows) break on key name so output is deterministic.
+    duration = window.window_seconds if window.window_seconds is not None else math.inf
+    return (duration, key)
+
+
 def fetch_openai_oauth_usage(access_token: str, account_id: str | None) -> UsageSnapshot:
     """Fetch live ChatGPT usage for an OAuth account. Never raises — network
     failures, timeouts, and unexpected response shapes all come back as an
@@ -94,28 +153,13 @@ def fetch_openai_oauth_usage(access_token: str, account_id: str | None) -> Usage
         return UsageSnapshot(available=False, message="unexpected response shape")
 
     rate_limit = body.get("rate_limit")
-    primary = rate_limit.get("primary_window") if isinstance(rate_limit, dict) else None
-    used_percent = primary.get("used_percent") if isinstance(primary, dict) else None
-    reset_at = _reset_at_millis(primary.get("reset_at")) if isinstance(primary, dict) else None
-    window_seconds = primary.get("limit_window_seconds") if isinstance(primary, dict) else None
+    candidates = rate_limit.items() if isinstance(rate_limit, dict) else []
+    parsed = [(key, window) for key, value in candidates if (window := _parse_window(value)) is not None]
+    windows = tuple(window for _key, window in sorted(parsed, key=_sort_key))
 
-    valid_percent = (
-        isinstance(used_percent, (int, float))
-        and not isinstance(used_percent, bool)
-        and (not isinstance(used_percent, float) or math.isfinite(used_percent))
-        and 0 <= used_percent <= 100
-    )
-    valid_window = (
-        isinstance(window_seconds, (int, float))
-        and not isinstance(window_seconds, bool)
-        and (not isinstance(window_seconds, float) or math.isfinite(window_seconds))
-        and window_seconds > 0
-    )
     return UsageSnapshot(
         available=True,
-        used_percent=used_percent if valid_percent else None,
         plan_name=_plan_name(body.get("plan_type")),
-        reset_at=reset_at,
-        window_seconds=window_seconds if valid_window else None,
+        windows=windows,
         message="ok",
     )
