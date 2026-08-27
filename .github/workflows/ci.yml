@@ -21,6 +21,13 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.3.14"
+      # Same cache key/path as the pr-lint.yml reviewdog actions, so a cache
+      # warmed by either workflow is reused by the other.
+      - name: Cache pre-commit
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit|${{ runner.os }}|${{ hashFiles('.pre-commit-config.yaml') }}
       # `make check` (part of `make verify`) shells out to the bare
       # `pre-commit` binary, not `uv run pre-commit` - install it directly.
       - run: pip install pre-commit

@@ -49,15 +49,40 @@ replace it with a long-lived token.
 
 ### Before first publish
 
-1. Reserve npm scope `@leinardi` and confirm `@leinardi/opencode-swap` name.
-2. In npm package settings, configure trusted publisher:
-    - Provider: GitHub Actions
-    - Organization: `leinardi`
+Unlike PyPI, npm has no "pending publisher" for a package that doesn't exist
+yet — the trusted publisher lives on the package's own Settings page, so the
+package needs a first, manual publish before it can be configured:
+
+1. `@leinardi` is a personal npm username scope, free for public packages
+   with no organization needed — do not create or convert to an npm
+   Organization for this.
+2. Create a GitHub environment named `npm` in repo settings (no secrets
+   needed — it only scopes the OIDC claim).
+3. One-time manual publish to create the package:
+
+   ```bash
+   cd integrations/opencode-tui-plugin
+   npm login
+   bun install --frozen-lockfile
+   npm publish --ignore-scripts   # publishConfig.access: public is already set
+   npm logout
+   ```
+
+4. On `https://www.npmjs.com/package/@leinardi/opencode-swap/access`, add a
+   Trusted Publisher:
+    - Publisher: GitHub Actions
+    - Organization or user: `leinardi`
     - Repository: `opencode-swap`
-    - Workflow: `publish-tui-plugin.yml`
-3. Run `make verify` with Bun 1.3.14.
-4. Review `npm pack --dry-run` output from
+    - Workflow filename: `publish-tui-plugin.yml`
+    - Environment name: `npm`
+    - Publishing access: require two-factor authentication and disallow
+      bypass 2FA tokens.
+5. Run `make verify` with Bun 1.3.14.
+6. Review `npm pack --dry-run` output from
    `make tui-plugin-package-check`.
+
+From then on, every release goes through `publish-tui-plugin.yml`'s OIDC —
+no personal token or login is used again.
 
 ### Release
 
