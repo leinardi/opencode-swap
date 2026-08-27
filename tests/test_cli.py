@@ -831,7 +831,7 @@ def test_export_keeps_extensionless_path_when_ocs_extension_declined(tmp_path, m
         ("oa", 2, {"a": "new-a", "b": "new-b"}),
     ],
 )
-def test_import_conflict_apply_to_all(  # noqa: PLR0913
+def test_import_conflict_apply_to_all(  # noqa: PLR0913, PLR0917
     choice, expected_count, expected_ids, tmp_path, monkeypatch, capsys
 ):
     for name in ("a", "b"):

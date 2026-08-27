@@ -201,7 +201,7 @@ def test_restore_reads_backup_after_acquiring_lock(switcher, monkeypatch):
     def restore():
         try:
             restorer.restore()
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 -- captured for the main thread to assert on, not swallowed
             errors.append(exc)
 
     thread = threading.Thread(target=restore)

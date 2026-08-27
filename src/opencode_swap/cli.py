@@ -14,7 +14,7 @@ import math
 import sys
 import time
 from collections.abc import Iterable
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from opencode_swap import __version__, backup, opencode_auth, paths, process_detection
@@ -237,7 +237,10 @@ def _format_reset(reset_at: object) -> str | None:
     except OverflowError:
         return None
     try:
-        reset_time = datetime.fromtimestamp(reset_at / 1000)
+        # Aware-UTC-then-astimezone(), not fromtimestamp(reset_at, tz=...): the
+        # reset time is shown in the user's local clock, same as time.time()
+        # below it, so the timestamp must convert to local, not stay UTC.
+        reset_time = datetime.fromtimestamp(reset_at / 1000, tz=UTC).astimezone()
     except (OverflowError, OSError, ValueError):
         return None
     if 0 <= reset_at - time.time() * 1000 < 86_400_000:

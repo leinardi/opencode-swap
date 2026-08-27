@@ -50,7 +50,13 @@ def _now_iso() -> str:
 
 
 def _transfer_added(value: str) -> str:
-    normalized = datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").strftime("%Y-%m-%dT%H:%M:%SZ")
+    # %z (not a literal "Z" in the format string) is what makes this an aware
+    # parse: Python's strptime treats a literal "Z" in the input as UTC under
+    # %z, same as _now_iso()'s producer side, and re-formatting with a
+    # literal "Z" here round-trips to the identical string for any input this
+    # produced. The point of the round trip is strict-canonical-format
+    # validation, not timezone conversion.
+    normalized = datetime.strptime(value, "%Y-%m-%dT%H:%M:%S%z").strftime("%Y-%m-%dT%H:%M:%SZ")
     if normalized != value:
         raise ValueError("timestamp is not canonical")
     return normalized
@@ -534,7 +540,14 @@ class Switcher:
                             self.secrets.delete(key)
                         else:
                             self.secrets.put(key, original)
-                    except BaseException:
+                    except BaseException:  # noqa: BLE001
+                        # Deliberately swallowed, not narrowed to Exception:
+                        # this is a best-effort rollback loop restoring every
+                        # attempted key, so one key's restore failure (of any
+                        # kind, including KeyboardInterrupt) must not stop the
+                        # rest from being attempted. The aggregate failure is
+                        # reported below via cleanup_failed, chained from the
+                        # original exc, not discarded.
                         cleanup_failed = True
                 if cleanup_failed:
                     raise OpenCodeSwapError("import failed and cleanup could not restore all previous credentials; registry was not changed") from exc
