@@ -108,18 +108,37 @@ def validate_oauth(raw: JsonObject, provider_id: str) -> AuthRecord:
     return AuthRecord(type="oauth", raw=dict(raw))
 
 
+_MIN_KEY_LENGTH_FOR_HINT = 20  # leaves >=16 characters hidden; see key_account_hint
+
+
 def credential_values(record: AuthRecord) -> set[str]:
     return {value for field in ("refresh", "access", "key", "token") if isinstance((value := record.raw.get(field)), str) and value}
 
 
 def key_account_hint(record: AuthRecord) -> str | None:
-    """Last 4 characters of an API key -- a stable, low-entropy identifier
-    for *which* key a saved account holds, shown in the account-id column in
+    """`"...{last 4 chars}"` of a static API key -- a stable identifier for
+    *which* key a saved account holds, shown in the account-id column in
     place of an account id for static-key providers (which have none). This
     is the same head/tail form providers show on their own API-key
-    dashboards, so a row can be matched against one. It is deliberately not
-    the full credential: 4 trailing characters of a high-entropy key can
-    neither reconstruct it nor meaningfully narrow a brute-force. Returns
-    None for a key too short to redact safely."""
+    dashboards, so a row can be matched against one; the literal `...`
+    carries no information about the key itself, it only marks the value as
+    a deliberate partial (matching how `cli._redact_account_id` marks a
+    truncated account id the same way).
+
+    Only ``record.type == "api"`` is considered: an oauth record's raw dict
+    can carry an unrelated/unverified `key` field (schema validation doesn't
+    forbid extra fields), and that is not the credential this hint is about.
+
+    Returns None below `_MIN_KEY_LENGTH_FOR_HINT`: revealing 4 characters of
+    a short, possibly low-entropy value (a hand-picked token, not a real API
+    key) can materially narrow it -- e.g. an 8-character key exposes half of
+    it. The threshold instead guarantees at least 16 characters stay hidden,
+    which no realistic API key format (all comfortably 20+ chars) is close
+    to tripping.
+    """
+    if record.type != "api":
+        return None
     key = record.raw.get("key")
-    return key[-4:] if isinstance(key, str) and len(key) >= 8 else None
+    if not isinstance(key, str) or len(key) < _MIN_KEY_LENGTH_FOR_HINT:
+        return None
+    return f"...{key[-4:]}"

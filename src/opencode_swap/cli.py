@@ -184,8 +184,18 @@ def cmd_list(switcher: Switcher, args: argparse.Namespace) -> int:
         # A static-key provider has no account id; describe() fills the slot
         # with a last-4 key hint instead. Prefer the live value over whatever
         # the registry captured at add time.
-        account_id = (desc.account_id if desc else None) or meta.account_id
-        rows.append((marker, provider_id, name, account_id, meta, validity, snapshot))
+        account_id = _redact_account_id((desc.account_id if desc else None) or meta.account_id)
+        email = meta.email or "-"
+        rows.append((marker, provider_id, name, account_id, email, validity, snapshot))
+
+    # Column widths float up to fit whatever is actually being printed
+    # (provider ids, account names, and emails are arbitrary-length user
+    # data, unlike the redacted account-id column, which _redact_account_id
+    # already bounds) -- floored at today's defaults so a short list renders
+    # exactly as before.
+    provider_w = max(22, *(len(provider_id) for _, provider_id, *_ in rows))
+    name_w = max(20, *(len(name) for _, _, name, *_ in rows))
+    email_w = max(28, *(len(email) for *_, email, _, _ in rows))
 
     # Column-align the usage block across rows: pad the validity tag to a
     # common width so every "usage:" starts in the same place, and pass the
@@ -193,10 +203,10 @@ def cmd_list(switcher: Switcher, args: argparse.Namespace) -> int:
     widths = _usage_column_widths(snapshot for *_, snapshot in rows) if args.usage else None
     tag_width = max((len(validity_tag[validity]) for *_, validity, _ in rows), default=0) if args.usage else 0
 
-    for marker, provider_id, name, account_id, meta, validity, snapshot in rows:
+    for marker, provider_id, name, account_id, email, validity, snapshot in rows:
         tag = f"{validity_tag[validity]:<{tag_width}}" if tag_width else validity_tag[validity]
         usage_suffix = _format_usage(snapshot, widths) if args.usage else ""
-        line = f"{marker} {provider_id:<22} {name:<20} {_redact_account_id(account_id):<8} {meta.email or '-':<28}{tag}{usage_suffix}"
+        line = f"{marker} {provider_id:<{provider_w}} {name:<{name_w}} {account_id:<8} {email:<{email_w}}{tag}{usage_suffix}"
         print(line)
     return 0
 

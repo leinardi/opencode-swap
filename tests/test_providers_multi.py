@@ -170,12 +170,12 @@ def test_zai_provider_shape_matches_generic_api_but_declares_a_usage_source():
     assert provider.fetch_usage(AuthRecord(type="api", raw={})) is None
 
 
-def test_api_key_account_id_is_the_key_last_four_not_the_full_key():
+def test_api_key_account_id_is_dotted_last_four_not_the_full_key():
     provider = get_provider("anthropic")
     record = provider.extract({"anthropic": {"type": "api", "key": "sk-abcdefghijklmnop-WXYZ"}})
     assert record is not None
     desc = provider.describe(record)
-    assert desc.account_id == "WXYZ"
+    assert desc.account_id == "...WXYZ"
     assert "abcdefghijklmnop" not in (desc.account_id or "")
 
 
@@ -186,9 +186,32 @@ def test_api_key_hint_is_none_for_a_short_key():
     assert provider.describe(record).account_id is None
 
 
+def test_api_key_hint_threshold_hides_at_least_sixteen_characters():
+    # A key one character short of the threshold exposes too large a
+    # fraction of a short/low-entropy key (e.g. "password" -> "word");
+    # the threshold guarantees >=16 characters stay hidden either way.
+    provider = get_provider("anthropic")
+    just_under = provider.extract({"anthropic": {"type": "api", "key": "a" * 19}})
+    at_threshold = provider.extract({"anthropic": {"type": "api", "key": "a" * 16 + "WXYZ"}})
+    assert just_under is not None and at_threshold is not None
+    assert provider.describe(just_under).account_id is None
+    assert provider.describe(at_threshold).account_id == "...WXYZ"
+
+
 @pytest.mark.parametrize("provider_id", ["poe", "xai", "github-copilot"])
 def test_oauth_record_has_no_key_hint(provider_id):
     provider = get_provider(provider_id)
     record = provider.extract({provider_id: {"type": "oauth", "refresh": "r" * 12, "access": "a" * 12, "expires": 0}})
+    assert record is not None
+    assert provider.describe(record).account_id is None
+
+
+@pytest.mark.parametrize("provider_id", ["poe", "xai"])
+def test_oauth_record_with_a_stray_key_field_never_produces_a_hint(provider_id):
+    """Regression: an oauth record's raw dict isn't schema-limited to known
+    fields, so a stray/unverified "key" entry must not be read as if it were
+    a static-key credential."""
+    provider = get_provider(provider_id)
+    record = provider.extract({provider_id: {"type": "oauth", "refresh": "r" * 12, "access": "a" * 12, "expires": 0, "key": "a" * 16 + "WXYZ"}})
     assert record is not None
     assert provider.describe(record).account_id is None

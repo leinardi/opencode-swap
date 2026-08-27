@@ -1,4 +1,5 @@
 import json
+import re
 import stat
 import time
 
@@ -429,18 +430,18 @@ def test_status_json_usage_reports_zai_windows(tmp_path, monkeypatch, capsys):
 
 
 def test_list_shows_api_key_last_four_in_the_account_column_not_the_key(tmp_path, capsys):
-    write_live_account(tmp_path, extra={"zai-coding-plan": {"type": "api", "key": "zai-full-secret-KEY9"}})
+    write_live_account(tmp_path, extra={"zai-coding-plan": {"type": "api", "key": "zai-full-secret-example-KEY9"}})
     assert cli.main(["add", "zai-coding-plan", "glm"]) == 0
     capsys.readouterr()
 
     assert cli.main(["list"]) == 0
     out = capsys.readouterr().out
-    assert "KEY9" in out
-    assert "zai-full-secret" not in out
+    assert "...KEY9" in out
+    assert "zai-full-secret-example" not in out
 
 
 def test_list_account_column_hint_is_live_even_for_an_account_added_before_the_feature(tmp_path, capsys):
-    write_live_account(tmp_path, extra={"zai-coding-plan": {"type": "api", "key": "zai-full-secret-KEY9"}})
+    write_live_account(tmp_path, extra={"zai-coding-plan": {"type": "api", "key": "zai-full-secret-example-KEY9"}})
     assert cli.main(["add", "zai-coding-plan", "glm"]) == 0
 
     # simulate a pre-feature registry row: account_id never captured
@@ -451,7 +452,23 @@ def test_list_account_column_hint_is_live_even_for_an_account_added_before_the_f
     capsys.readouterr()
 
     assert cli.main(["list"]) == 0
-    assert "KEY9" in capsys.readouterr().out
+    assert "...KEY9" in capsys.readouterr().out
+
+
+def test_list_columns_stay_aligned_when_a_provider_id_is_longer_than_the_default_width(tmp_path, capsys):
+    write_live_account(tmp_path, account_id="acct-1", extra={"a-very-long-custom-provider-id": {"type": "api", "key": "short-key"}})
+    assert cli.main(["add", "openai", "work"]) == 0
+    assert cli.main(["add", "a-very-long-custom-provider-id", "also"]) == 0
+    capsys.readouterr()
+
+    assert cli.main(["list"]) == 0
+    lines = [line for line in capsys.readouterr().out.splitlines() if line.strip()]
+    assert len(lines) == 2
+    # the (fixed-width, 8-char) account-id column starts at the same offset
+    # on both rows despite the long custom provider id widening its column
+    matches = [re.match(r"^[*\s] (\S+)\s+(\S+)\s+(\S+)\s+", line) for line in lines]
+    assert all(matches)
+    assert len({m.start(3) for m in matches}) == 1
 
 
 def test_list_never_prints_secrets(tmp_path, capsys):
