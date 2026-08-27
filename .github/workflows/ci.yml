@@ -21,4 +21,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.3.14"
+      # `make check` (part of `make verify`) shells out to the bare
+      # `pre-commit` binary, not `uv run pre-commit` - install it directly.
+      - run: pip install pre-commit
       - run: make verify
