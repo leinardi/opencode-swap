@@ -40,6 +40,17 @@ Add this path to global `~/.config/opencode/tui.json`:
 OpenCode installs `@opencode-ai/plugin` for config-scoped local plugins when
 needed. Restart the TUI after editing `tui.json`.
 
+## Build
+
+The npm payload ships `dist/tui.js`, precompiled with OpenTUI's own Solid
+transform (`bun run build`). This is not an optimization: OpenCode's runtime
+Solid transform deliberately skips anything under `node_modules`, so a
+package that exports raw `.tsx` loads through Bun's generic JSX runtime
+instead — it renders once with no reactivity wired, silently freezing the
+widget while commands keep working. A checkout path is outside
+`node_modules`, so "Install from this checkout" above keeps working from
+`src/tui.tsx` directly.
+
 ## Typecheck
 
 Requires Bun 1.3.14. Root `make verify` installs locked dependencies and runs

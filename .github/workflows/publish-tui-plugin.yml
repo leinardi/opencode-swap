@@ -38,10 +38,16 @@ jobs:
           fi
       - name: Install locked dependencies
         run: bun install --cwd integrations/opencode-tui-plugin --frozen-lockfile
+      # npm publish below runs with --ignore-scripts, so prepublishOnly will
+      # not build; compile the entry explicitly before verifying or publishing.
+      - name: Build plugin entry
+        run: bun run --cwd integrations/opencode-tui-plugin build
       - name: Verify package
         run: bun run --cwd integrations/opencode-tui-plugin check
       - name: Verify npm peer resolution
         run: ./scripts/check-npm-resolution.sh integrations/opencode-tui-plugin
+      - name: Verify compiled entry
+        run: ./scripts/check-tui-entry-compiled.sh integrations/opencode-tui-plugin
       - name: Check existing version
         id: registry
         env:

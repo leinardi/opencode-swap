@@ -20,9 +20,19 @@ tui-plugin-typecheck: tui-plugin-sync ## Typecheck OpenCode TUI plugin
 tui-plugin-lint: tui-plugin-sync ## Lint OpenCode TUI plugin
 	$(BUN) run --cwd $(TUI_PLUGIN_DIR) lint
 
+.PHONY: tui-plugin-build
+tui-plugin-build: tui-plugin-sync ## Compile OpenCode TUI plugin entry with the Solid transform
+	$(BUN) run --cwd $(TUI_PLUGIN_DIR) build
+
 .PHONY: tui-plugin-package-check
-tui-plugin-package-check: tui-plugin-sync ## Verify OpenCode TUI plugin npm payload
+tui-plugin-package-check: tui-plugin-build ## Verify OpenCode TUI plugin npm payload
 	$(BUN) run --cwd $(TUI_PLUGIN_DIR) pack:check
+
+# OpenCode's Solid transform skips node_modules, so the published entry must
+# already be compiled; raw JSX ships silently and renders without reactivity.
+.PHONY: tui-plugin-entry-check
+tui-plugin-entry-check: tui-plugin-build ## Verify packed TUI plugin entry is precompiled Solid output
+	"$(REPO_ROOT)/scripts/check-tui-entry-compiled.sh" "$(TUI_PLUGIN_DIR)"
 
 # Deliberately does not depend on tui-plugin-sync: this must resolve the packed
 # payload with npm from a clean slate, because Bun only warns on the peer
