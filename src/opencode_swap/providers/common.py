@@ -110,3 +110,16 @@ def validate_oauth(raw: JsonObject, provider_id: str) -> AuthRecord:
 
 def credential_values(record: AuthRecord) -> set[str]:
     return {value for field in ("refresh", "access", "key", "token") if isinstance((value := record.raw.get(field)), str) and value}
+
+
+def key_account_hint(record: AuthRecord) -> str | None:
+    """Last 4 characters of an API key -- a stable, low-entropy identifier
+    for *which* key a saved account holds, shown in the account-id column in
+    place of an account id for static-key providers (which have none). This
+    is the same head/tail form providers show on their own API-key
+    dashboards, so a row can be matched against one. It is deliberately not
+    the full credential: 4 trailing characters of a high-entropy key can
+    neither reconstruct it nor meaningfully narrow a brute-force. Returns
+    None for a key too short to redact safely."""
+    key = record.raw.get("key")
+    return key[-4:] if isinstance(key, str) and len(key) >= 8 else None

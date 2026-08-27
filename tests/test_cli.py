@@ -428,6 +428,32 @@ def test_status_json_usage_reports_zai_windows(tmp_path, monkeypatch, capsys):
     assert [w["window_seconds"] for w in usage_block["windows"]] == [18000, 604800]
 
 
+def test_list_shows_api_key_last_four_in_the_account_column_not_the_key(tmp_path, capsys):
+    write_live_account(tmp_path, extra={"zai-coding-plan": {"type": "api", "key": "zai-full-secret-KEY9"}})
+    assert cli.main(["add", "zai-coding-plan", "glm"]) == 0
+    capsys.readouterr()
+
+    assert cli.main(["list"]) == 0
+    out = capsys.readouterr().out
+    assert "KEY9" in out
+    assert "zai-full-secret" not in out
+
+
+def test_list_account_column_hint_is_live_even_for_an_account_added_before_the_feature(tmp_path, capsys):
+    write_live_account(tmp_path, extra={"zai-coding-plan": {"type": "api", "key": "zai-full-secret-KEY9"}})
+    assert cli.main(["add", "zai-coding-plan", "glm"]) == 0
+
+    # simulate a pre-feature registry row: account_id never captured
+    data_root = tmp_path / "opencode-swap"
+    switcher = Switcher(opencode_auth_path=auth_path(tmp_path), data_root=data_root, platform=Platform.UNKNOWN)
+    meta = switcher.registry.scoped_accounts()[("zai-coding-plan", "glm")]
+    switcher.registry.upsert_account(AccountMeta(meta.name, meta.provider, meta.type, None, meta.email, meta.added))
+    capsys.readouterr()
+
+    assert cli.main(["list"]) == 0
+    assert "KEY9" in capsys.readouterr().out
+
+
 def test_list_never_prints_secrets(tmp_path, capsys):
     write_live_account(tmp_path, account_id="acct-1", refresh="super-secret-refresh-token")
     cli.main(["add", "openai", "work"])

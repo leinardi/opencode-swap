@@ -839,13 +839,19 @@ class Switcher:
         return provider.fetch_usage(record)
 
     def account_validity(self, name: str, provider_id: str = "openai") -> Validity:
-        """Validity of a saved account's stored record (OK/EXPIRED/INVALID).
+        """Validity of a saved account's most current record. See
+        `account_status` for the full semantics."""
+        return self.account_status(name, provider_id)[0]
 
-        INVALID here means the secret is missing or unreadable (e.g. deleted
-        out-of-band from the secret store) — the registry entry is orphaned.
+    def account_status(self, name: str, provider_id: str = "openai") -> tuple[Validity, AccountDesc | None]:
+        """`(validity, description)` of a saved account's most current record.
+
+        `validity` is OK/EXPIRED/INVALID; INVALID means the secret is missing
+        or unreadable (registry entry orphaned), in which case `description`
+        is None.
 
         Prefers the live auth.json record when it can be positively
-        attributed to `name` (see `_ensure_refreshed`) — OpenCode rotates
+        attributed to `name` (see `_ensure_refreshed`) -- OpenCode rotates
         tokens in `auth.json` in place, so the account currently active in
         OpenCode may look expired in opencode-swap's stored snapshot while
         the live copy is still perfectly valid. Never triggers a network
@@ -857,9 +863,10 @@ class Switcher:
             raise OpenCodeSwapError(f"no such account: {name}")
         result = self._ensure_refreshed(provider_id, name, allow_refresh=False)
         if result is None:
-            return Validity.INVALID
+            return Validity.INVALID, None
         record, _outcome = result
-        return self._provider(meta.provider).validate(record)
+        provider = self._provider(meta.provider)
+        return provider.validate(record), provider.describe(record)
 
     def refresh_account(self, name: str, provider_id: str = "openai") -> AccountRefreshResult:
         """Ensure a saved account's OAuth token is valid, refreshing it over

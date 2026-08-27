@@ -180,8 +180,12 @@ def cmd_list(switcher: Switcher, args: argparse.Namespace) -> int:
         # the validity tag on the same line rather than showing a stale
         # "(expired)" next to freshly-fetched numbers.
         snapshot = switcher.fetch_usage(name, provider_id=provider_id) if args.usage else None
-        validity = switcher.account_validity(name, provider_id=provider_id)
-        rows.append((marker, provider_id, name, meta, validity, snapshot))
+        validity, desc = switcher.account_status(name, provider_id=provider_id)
+        # A static-key provider has no account id; describe() fills the slot
+        # with a last-4 key hint instead. Prefer the live value over whatever
+        # the registry captured at add time.
+        account_id = (desc.account_id if desc else None) or meta.account_id
+        rows.append((marker, provider_id, name, account_id, meta, validity, snapshot))
 
     # Column-align the usage block across rows: pad the validity tag to a
     # common width so every "usage:" starts in the same place, and pass the
@@ -189,10 +193,10 @@ def cmd_list(switcher: Switcher, args: argparse.Namespace) -> int:
     widths = _usage_column_widths(snapshot for *_, snapshot in rows) if args.usage else None
     tag_width = max((len(validity_tag[validity]) for *_, validity, _ in rows), default=0) if args.usage else 0
 
-    for marker, provider_id, name, meta, validity, snapshot in rows:
+    for marker, provider_id, name, account_id, meta, validity, snapshot in rows:
         tag = f"{validity_tag[validity]:<{tag_width}}" if tag_width else validity_tag[validity]
         usage_suffix = _format_usage(snapshot, widths) if args.usage else ""
-        line = f"{marker} {provider_id:<22} {name:<20} {_redact_account_id(meta.account_id):<8} {meta.email or '-':<28}{tag}{usage_suffix}"
+        line = f"{marker} {provider_id:<22} {name:<20} {_redact_account_id(account_id):<8} {meta.email or '-':<28}{tag}{usage_suffix}"
         print(line)
     return 0
 
@@ -502,7 +506,7 @@ def cmd_current(switcher: Switcher, args: argparse.Namespace) -> int:
         elif meta is None:
             print(f"{provider_id}: active account opencode-swap doesn't manage ({_redact_account_id(desc.account_id)})")
         else:
-            print(f"{provider_id}: {meta.name} ({meta.email or 'no email'}, account {_redact_account_id(meta.account_id)})")
+            print(f"{provider_id}: {meta.name} ({meta.email or 'no email'}, account {_redact_account_id(desc.account_id or meta.account_id)})")
     return 1 if incompatible else 0
 
 

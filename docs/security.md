@@ -156,7 +156,7 @@ a strong, unique passphrase; archive security depends on its entropy.
 
 | Data | Location | Sensitive? |
 | --- | --- | --- |
-| Provider-scoped account name, type, account id, email, added timestamp, active hint | `registry.json` (`0600`) | No — never a token |
+| Provider-scoped account name, type, account id, email, added timestamp, active hint | `registry.json` (`0600`) | No — never a token (a static-key account's "account id" is the API key's last 4 chars only) |
 | Original registry before automatic v1-to-v2 migration | `registry.v1.json.bak` (`0600`) | No — never a token |
 | Access token, refresh token, API key | Linux `secrets/v2-*.enc` (`0600`, base64); macOS `secrets/v3-*.enc` (`0600`, AES-256-GCM) + Keychain data key, or `v2-*.enc` fallback on a genuine outage | Yes |
 | Pre-switch/pristine/unclaimed/discarded-restore `auth.json` snapshots | `backups/*.json` (`0600`, dir `0700`) | Yes — full credential records |
@@ -167,7 +167,12 @@ The non-secret/secret split is enforced structurally: `AccountMeta` (the
 registry dataclass) has no field that could hold a token, and the one place
 identity derivation *could* use a credential value (`Provider.identity`) is never
 persisted to the registry — only recomputed on demand from data already
-loaded from the secret store. See `docs/architecture.md#the-provider-seam`.
+loaded from the secret store. The single deliberate carve-out is that a
+static-key account, having no real account id, shows the API key's **last 4
+characters** in that slot (`providers.common.key_account_hint`) so a listed
+row can be matched against the provider's own key dashboard; 4 trailing
+characters of a high-entropy key can neither reconstruct it nor narrow a
+brute-force, and the guard rejects keys short enough for that to matter. See `docs/architecture.md#the-provider-seam`.
 Provider implementations enumerate credential fields for archive metadata
 filtering. Unstable OAuth identities trigger preservation and refusal instead
 of guessing ownership.
@@ -179,9 +184,10 @@ of guessing ownership.
   Linux writes them directly through the atomic file primitive.
 - CLI output never includes an access token, refresh token, or API key.
   Account ids are shown truncated to their last 4 characters, even though
-  an account id alone isn't secret — matching the stated output policy.
-  Enforced by tests that plant a known secret value and grep captured
-  stdout/stderr for it.
+  an account id alone isn't secret — matching the stated output policy. For a
+  static-key account the same column shows only the API key's last 4
+  characters (see the carve-out above). Enforced by tests that plant a known
+  secret value and grep captured stdout/stderr for it.
 - Every file this project writes uses the same atomic-write primitive
   (`atomic.py`): a `0600` temp file in the target's own directory, then
   `os.replace`. No file is ever created world- or group-readable, even

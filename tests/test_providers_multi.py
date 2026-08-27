@@ -168,3 +168,27 @@ def test_zai_provider_shape_matches_generic_api_but_declares_a_usage_source():
     assert provider.splice({}, record) == auth
     # no key in the record -> not looked up, rather than a request with an empty bearer
     assert provider.fetch_usage(AuthRecord(type="api", raw={})) is None
+
+
+def test_api_key_account_id_is_the_key_last_four_not_the_full_key():
+    provider = get_provider("anthropic")
+    record = provider.extract({"anthropic": {"type": "api", "key": "sk-abcdefghijklmnop-WXYZ"}})
+    assert record is not None
+    desc = provider.describe(record)
+    assert desc.account_id == "WXYZ"
+    assert "abcdefghijklmnop" not in (desc.account_id or "")
+
+
+def test_api_key_hint_is_none_for_a_short_key():
+    provider = get_provider("anthropic")
+    record = provider.extract({"anthropic": {"type": "api", "key": "sk-abc"}})
+    assert record is not None
+    assert provider.describe(record).account_id is None
+
+
+@pytest.mark.parametrize("provider_id", ["poe", "xai", "github-copilot"])
+def test_oauth_record_has_no_key_hint(provider_id):
+    provider = get_provider(provider_id)
+    record = provider.extract({provider_id: {"type": "oauth", "refresh": "r" * 12, "access": "a" * 12, "expires": 0}})
+    assert record is not None
+    assert provider.describe(record).account_id is None
