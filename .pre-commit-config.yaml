@@ -30,15 +30,25 @@ repos:
       - id: mypy
         alias: mypy-json-output
         name: mypy (json output)
+        # pass_filenames must stay false and the target must stay
+        # src/opencode_swap, matching the `mypy` hook above: this hook has no
+        # `files:` filter, so without pinning the target pre-commit hands it
+        # whatever files changed instead, which pulls tests/ (never meant to
+        # pass strict mypy) into the check via --from-ref/--to-ref in CI. Do
+        # not add --ignore-missing-imports either: it silently drops the
+        # import-untyped errors the `# type: ignore[import-untyped]` markers
+        # (e.g. transfer.py's pyzipper import) exist to suppress, which then
+        # makes mypy flag those markers themselves as unused-ignore.
+        pass_filenames: false
         args:
           [
+            "src/opencode_swap",
             "--output",
             "json",
             "--hide-error-context",
             "--show-column-numbers",
             "--show-absolute-path",
             "--no-pretty",
-            "--ignore-missing-imports",
             "--scripts-are-modules",
           ]
         additional_dependencies:
