@@ -40,6 +40,8 @@ jobs:
         run: bun install --cwd integrations/opencode-tui-plugin --frozen-lockfile
       - name: Verify package
         run: bun run --cwd integrations/opencode-tui-plugin check
+      - name: Verify npm peer resolution
+        run: ./scripts/check-npm-resolution.sh integrations/opencode-tui-plugin
       - name: Check existing version
         id: registry
         env:
