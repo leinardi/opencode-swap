@@ -17,7 +17,7 @@ import fcntl
 import time
 from pathlib import Path
 from types import TracebackType
-from typing import IO
+from typing import IO, Self
 
 from opencode_swap.exceptions import LockError
 
@@ -56,7 +56,7 @@ class FileLock:
             self._lock_file = None
             self._locked = False
 
-    def __enter__(self) -> FileLock:
+    def __enter__(self) -> Self:
         if not self.acquire():
             raise LockError(f"failed to acquire lock at {self.lock_path} within {self.timeout}s — another opencode-swap instance may be running")
         return self

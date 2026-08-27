@@ -62,7 +62,7 @@ def test_two_switcher_instances_racing_use_serialize_without_corruption(paths):
         barrier.wait()
         try:
             results[key] = switcher.use_account(target).name
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 -- captured for the main thread to assert on, not swallowed
             results[key] = exc
 
     t1 = threading.Thread(target=worker, args=("t1", "a"))
@@ -115,7 +115,7 @@ def test_many_concurrent_switches_leave_consistent_final_state(paths):
         barrier.wait()
         try:
             switcher.use_account(target)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 -- captured for the main thread to assert on, not swallowed
             with errors_lock:
                 errors.append(exc)
 
@@ -187,7 +187,7 @@ def test_concurrent_refreshes_spend_the_single_use_refresh_token_once(paths, mon
         barrier.wait()
         try:
             results[key] = switcher.refresh_account("a")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 -- captured for the main thread to assert on, not swallowed
             results[key] = exc
 
     t1 = threading.Thread(target=worker, args=("t1",))
