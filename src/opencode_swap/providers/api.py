@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from opencode_swap import usage
 from opencode_swap.exceptions import SchemaError
 from opencode_swap.models import AccountDesc, AuthRecord, JsonObject, Validity
-from opencode_swap.providers.common import credential_values, extract_raw, published_raw, validate_api
+from opencode_swap.providers.common import credential_values, extract_raw, key_account_hint, published_raw, validate_api
 
 
 class ApiProvider:
+    usage_record_types: frozenset[str] = frozenset()  # no known usage endpoint for an arbitrary API provider
+
     def __init__(self, provider_id: str):
         self.id = provider_id
 
@@ -35,10 +38,13 @@ class ApiProvider:
         return credential_values(record)
 
     def describe(self, record: AuthRecord) -> AccountDesc:
-        return AccountDesc(type="api", email=None, account_id=None, expires=None)
+        return AccountDesc(type="api", email=None, account_id=key_account_hint(record), expires=None)
 
     def validate(self, record: AuthRecord) -> Validity:
         return Validity.OK if record.type == "api" else Validity.INVALID
 
     def refresh(self, record: AuthRecord) -> AuthRecord | None:
         return None  # API keys don't expire/rotate; nothing to refresh
+
+    def fetch_usage(self, record: AuthRecord) -> usage.UsageSnapshot | None:
+        return None  # no usage endpoint for an arbitrary API provider (usage_record_types is empty)

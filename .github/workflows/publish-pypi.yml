@@ -1,0 +1,62 @@
+name: Publish PyPI
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v5
+      - name: Verify release version
+        id: package
+        run: |
+          VERSION=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_REF_TYPE" = "tag" ] && [ "$GITHUB_REF_NAME" != "v$VERSION" ]; then
+            echo "Tag must be v$VERSION, got $GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+      - name: Install locked dependencies
+        run: uv sync --dev
+      - name: Run test suite
+        run: uv run pytest -q
+      - name: Build wheel and sdist
+        run: uv build
+      - name: Check existing version
+        id: registry
+        env:
+          PACKAGE_VERSION: ${{ steps.package.outputs.version }}
+        run: |
+          if curl -fsSL "https://pypi.org/pypi/opencode-swap/$PACKAGE_VERSION/json" >/dev/null 2>&1; then
+            if [ "$GITHUB_REF_TYPE" != "tag" ]; then
+              echo "opencode-swap==$PACKAGE_VERSION is already published" >&2
+              exit 1
+            fi
+            echo "published=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Publish to PyPI
+        if: steps.registry.outputs.published != 'true'
+        uses: pypa/gh-action-pypi-publish@release/v1
+      - name: Attach build artifacts to GitHub release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" dist/* --clobber

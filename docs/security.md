@@ -29,13 +29,19 @@ false security.
 
 ### Network calls
 
-`opencode-swap` is local/offline-only except for two opt-in exceptions, both
-gated behind an explicit CLI flag or subcommand — never triggered by a plain
-`list`/`status`/`current`:
+`opencode-swap` is local/offline-only except for the opt-in exceptions below,
+all gated behind an explicit CLI flag or subcommand — never triggered by a
+plain `list`/`status`/`current`:
 
-- `usage.py` — `GET https://chatgpt.com/backend-api/wham/usage`, only from
-  `list --usage`/`status --usage`, sending a saved account's access token as
-  Bearer auth.
+- `usage.py` — live usage lookup, only from `list --usage`/`status --usage`,
+  sending the saved account's own credential as Bearer auth to that
+  provider's usage endpoint: OpenAI ChatGPT OAuth sends the OAuth access
+  token to `GET https://chatgpt.com/backend-api/wham/usage`; Z.AI
+  `zai-coding-plan` sends the account API key to
+  `GET https://api.z.ai/api/monitor/usage/quota/limit`. Error output from
+  these requests is fixed text or an HTTP status code only — the Bearer
+  value is never stringified into a message even when the underlying
+  library embeds it in an exception.
 - `oauth_refresh.py` — `POST https://auth.openai.com/oauth/token`, from
   `list --usage`/`status --usage` (only for a saved account that isn't the
   one OpenCode currently has live and whose stored token has expired) and
@@ -150,7 +156,7 @@ a strong, unique passphrase; archive security depends on its entropy.
 
 | Data | Location | Sensitive? |
 | --- | --- | --- |
-| Provider-scoped account name, type, account id, email, added timestamp, active hint | `registry.json` (`0600`) | No — never a token |
+| Provider-scoped account name, type, account id, email, added timestamp, active hint | `registry.json` (`0600`) | No — never a token (a static-key account's "account id" is the API key's last 4 chars only) |
 | Original registry before automatic v1-to-v2 migration | `registry.v1.json.bak` (`0600`) | No — never a token |
 | Access token, refresh token, API key | Linux `secrets/v2-*.enc` (`0600`, base64); macOS `secrets/v3-*.enc` (`0600`, AES-256-GCM) + Keychain data key, or `v2-*.enc` fallback on a genuine outage | Yes |
 | Pre-switch/pristine/unclaimed/discarded-restore `auth.json` snapshots | `backups/*.json` (`0600`, dir `0700`) | Yes — full credential records |
@@ -161,7 +167,12 @@ The non-secret/secret split is enforced structurally: `AccountMeta` (the
 registry dataclass) has no field that could hold a token, and the one place
 identity derivation *could* use a credential value (`Provider.identity`) is never
 persisted to the registry — only recomputed on demand from data already
-loaded from the secret store. See `docs/architecture.md#the-provider-seam`.
+loaded from the secret store. The single deliberate carve-out is that a
+static-key account, having no real account id, shows the API key's **last 4
+characters** in that slot (`providers.common.key_account_hint`) so a listed
+row can be matched against the provider's own key dashboard; 4 trailing
+characters of a high-entropy key can neither reconstruct it nor narrow a
+brute-force, and the guard rejects keys short enough for that to matter. See `docs/architecture.md#the-provider-seam`.
 Provider implementations enumerate credential fields for archive metadata
 filtering. Unstable OAuth identities trigger preservation and refusal instead
 of guessing ownership.
@@ -173,9 +184,10 @@ of guessing ownership.
   Linux writes them directly through the atomic file primitive.
 - CLI output never includes an access token, refresh token, or API key.
   Account ids are shown truncated to their last 4 characters, even though
-  an account id alone isn't secret — matching the stated output policy.
-  Enforced by tests that plant a known secret value and grep captured
-  stdout/stderr for it.
+  an account id alone isn't secret — matching the stated output policy. For a
+  static-key account the same column shows only the API key's last 4
+  characters (see the carve-out above). Enforced by tests that plant a known
+  secret value and grep captured stdout/stderr for it.
 - Every file this project writes uses the same atomic-write primitive
   (`atomic.py`): a `0600` temp file in the target's own directory, then
   `os.replace`. No file is ever created world- or group-readable, even

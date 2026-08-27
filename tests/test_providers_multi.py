@@ -2,12 +2,19 @@ import time
 
 import pytest
 
+from opencode_swap import usage
 from opencode_swap.exceptions import SchemaError
-from opencode_swap.models import Validity
+from opencode_swap.models import AuthRecord, Validity
 from opencode_swap.providers import PROVIDERS, get_provider
 from tests.helpers import make_jwt
 
 FRACTIONAL_EXPIRY = 1_730_000_000_000.5
+
+# Providers whose `extract` accepts an oauth record. Kept explicit (not
+# derived from a caught SchemaError) so a regression where an OAuth provider
+# starts rejecting valid OAuth records fails the test below instead of
+# silently skipping it.
+OAUTH_CAPABLE_PROVIDERS = {"openai", "github-copilot", "poe", "xai"}
 
 
 def test_generic_api_provider_preserves_string_metadata():
@@ -119,6 +126,15 @@ def test_every_provider_splice_publishes_an_integer_expiry(provider_id):
     from OpenCode at runtime."""
     provider = get_provider(provider_id)
     entry = {"type": "oauth", "refresh": "token", "access": make_jwt({"chatgpt_account_id": "acct-1"}), "expires": FRACTIONAL_EXPIRY}
+
+    if provider_id not in OAUTH_CAPABLE_PROVIDERS:
+        # An API-only provider must reject the oauth record outright rather
+        # than accept and mis-handle it -- splice never sees a fractional
+        # expiry because extract fails closed first.
+        with pytest.raises(SchemaError):
+            provider.extract({provider_id: entry})
+        return
+
     record = provider.extract({provider_id: entry})
     assert record is not None
 
@@ -126,3 +142,76 @@ def test_every_provider_splice_publishes_an_integer_expiry(provider_id):
 
     assert spliced["expires"] == int(FRACTIONAL_EXPIRY)
     assert isinstance(spliced["expires"], int)
+
+
+@pytest.mark.parametrize("provider_id", sorted(PROVIDERS))
+def test_provider_without_usage_source_returns_none_and_does_no_io(provider_id, monkeypatch):
+    provider = PROVIDERS[provider_id]
+    if provider.usage_record_types:
+        pytest.skip(f"{provider_id} has a usage source")
+
+    def boom(*a, **k):
+        raise AssertionError("fetch_usage must not perform I/O for a provider with no usage source")
+
+    monkeypatch.setattr(usage.urllib.request, "urlopen", boom)
+    assert provider.fetch_usage(AuthRecord(type="api", raw={"key": "k"})) is None
+    assert provider.fetch_usage(AuthRecord(type="oauth", raw={"refresh": "r", "access": "a"})) is None
+
+
+def test_zai_provider_shape_matches_generic_api_but_declares_a_usage_source():
+    provider = PROVIDERS["zai-coding-plan"]
+    assert provider.usage_record_types == frozenset({"api"})
+    auth = {"zai-coding-plan": {"type": "api", "key": "zk"}}
+    record = provider.extract(auth)
+    assert record is not None
+    assert provider.identity(record) == "api-key\0zk"
+    assert provider.splice({}, record) == auth
+    # no key in the record -> not looked up, rather than a request with an empty bearer
+    assert provider.fetch_usage(AuthRecord(type="api", raw={})) is None
+
+
+def test_api_key_account_id_is_dotted_last_four_not_the_full_key():
+    provider = get_provider("anthropic")
+    record = provider.extract({"anthropic": {"type": "api", "key": "sk-abcdefghijklmnop-WXYZ"}})
+    assert record is not None
+    desc = provider.describe(record)
+    assert desc.account_id == "...WXYZ"
+    assert "abcdefghijklmnop" not in (desc.account_id or "")
+
+
+def test_api_key_hint_is_none_for_a_short_key():
+    provider = get_provider("anthropic")
+    record = provider.extract({"anthropic": {"type": "api", "key": "sk-abc"}})
+    assert record is not None
+    assert provider.describe(record).account_id is None
+
+
+def test_api_key_hint_threshold_hides_at_least_sixteen_characters():
+    # A key one character short of the threshold exposes too large a
+    # fraction of a short/low-entropy key (e.g. "password" -> "word");
+    # the threshold guarantees >=16 characters stay hidden either way.
+    provider = get_provider("anthropic")
+    just_under = provider.extract({"anthropic": {"type": "api", "key": "a" * 19}})
+    at_threshold = provider.extract({"anthropic": {"type": "api", "key": "a" * 16 + "WXYZ"}})
+    assert just_under is not None and at_threshold is not None
+    assert provider.describe(just_under).account_id is None
+    assert provider.describe(at_threshold).account_id == "...WXYZ"
+
+
+@pytest.mark.parametrize("provider_id", ["poe", "xai", "github-copilot"])
+def test_oauth_record_has_no_key_hint(provider_id):
+    provider = get_provider(provider_id)
+    record = provider.extract({provider_id: {"type": "oauth", "refresh": "r" * 12, "access": "a" * 12, "expires": 0}})
+    assert record is not None
+    assert provider.describe(record).account_id is None
+
+
+@pytest.mark.parametrize("provider_id", ["poe", "xai"])
+def test_oauth_record_with_a_stray_key_field_never_produces_a_hint(provider_id):
+    """Regression: an oauth record's raw dict isn't schema-limited to known
+    fields, so a stray/unverified "key" entry must not be read as if it were
+    a static-key credential."""
+    provider = get_provider(provider_id)
+    record = provider.extract({provider_id: {"type": "oauth", "refresh": "r" * 12, "access": "a" * 12, "expires": 0, "key": "a" * 16 + "WXYZ"}})
+    assert record is not None
+    assert provider.describe(record).account_id is None

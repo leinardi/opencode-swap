@@ -792,11 +792,12 @@ class Switcher:
             return self._finish_restore(data)
 
     def fetch_usage(self, name: str, provider_id: str = "openai") -> usage.UsageSnapshot | None:
-        """Live OpenAI usage lookup for a saved account. None if the
-        account has no OAuth record to look up usage for (e.g. an API-key
-        account, or a secret store that's out of sync) -- this is a
-        distinct "not applicable" case from usage.UsageSnapshot's own
-        available=False ("looked it up, the request failed").
+        """Live usage lookup for a saved account, for providers that have a
+        usage source (OpenAI OAuth, Z.AI GLM Coding Plan). None when the
+        provider has no usage source, the saved record's type isn't one it
+        can look up, or the secret store is out of sync -- a distinct "not
+        applicable" case from usage.UsageSnapshot's own available=False
+        ("looked it up, the request failed").
 
         Prefers OpenCode's own live auth.json over opencode-swap's stored
         snapshot when the live record can be positively attributed to
@@ -810,10 +811,12 @@ class Switcher:
         demand when it's expired -- this is the one thing besides the
         explicit `refresh` command that spends network quota and a
         single-use refresh token, and only because the caller already
-        opted in with `--usage`.
+        opted in with `--usage`. (Static API-key providers never refresh;
+        the whole block below is a no-op for them.)
         """
+        provider = self._provider(provider_id)
         meta = self.registry.scoped_accounts().get((provider_id, name))
-        if meta is None or meta.provider != "openai" or meta.type != "oauth":
+        if meta is None or meta.type not in provider.usage_record_types:
             return None
 
         try:
@@ -824,7 +827,7 @@ class Switcher:
             return None
         record, outcome = result
 
-        if self._provider(provider_id).validate(record) != Validity.OK:
+        if provider.validate(record) != Validity.OK:
             if outcome is RefreshOutcome.LIVE:
                 message = "expired; OpenCode refreshes on next request"
             elif outcome is RefreshOutcome.AMBIGUOUS:
@@ -833,20 +836,22 @@ class Switcher:
                 message = "expired and no standalone refresh available for this account type"
             return usage.UsageSnapshot(available=False, message=message)
 
-        access = record.raw.get("access")
-        if not isinstance(access, str):
-            return None
-        account_id = record.raw.get("accountId")
-        return usage.fetch_openai_oauth_usage(access, account_id if isinstance(account_id, str) else None)
+        return provider.fetch_usage(record)
 
     def account_validity(self, name: str, provider_id: str = "openai") -> Validity:
-        """Validity of a saved account's stored record (OK/EXPIRED/INVALID).
+        """Validity of a saved account's most current record. See
+        `account_status` for the full semantics."""
+        return self.account_status(name, provider_id)[0]
 
-        INVALID here means the secret is missing or unreadable (e.g. deleted
-        out-of-band from the secret store) — the registry entry is orphaned.
+    def account_status(self, name: str, provider_id: str = "openai") -> tuple[Validity, AccountDesc | None]:
+        """`(validity, description)` of a saved account's most current record.
+
+        `validity` is OK/EXPIRED/INVALID; INVALID means the secret is missing
+        or unreadable (registry entry orphaned), in which case `description`
+        is None.
 
         Prefers the live auth.json record when it can be positively
-        attributed to `name` (see `_ensure_refreshed`) — OpenCode rotates
+        attributed to `name` (see `_ensure_refreshed`) -- OpenCode rotates
         tokens in `auth.json` in place, so the account currently active in
         OpenCode may look expired in opencode-swap's stored snapshot while
         the live copy is still perfectly valid. Never triggers a network
@@ -858,9 +863,10 @@ class Switcher:
             raise OpenCodeSwapError(f"no such account: {name}")
         result = self._ensure_refreshed(provider_id, name, allow_refresh=False)
         if result is None:
-            return Validity.INVALID
+            return Validity.INVALID, None
         record, _outcome = result
-        return self._provider(meta.provider).validate(record)
+        provider = self._provider(meta.provider)
+        return provider.validate(record), provider.describe(record)
 
     def refresh_account(self, name: str, provider_id: str = "openai") -> AccountRefreshResult:
         """Ensure a saved account's OAuth token is valid, refreshing it over

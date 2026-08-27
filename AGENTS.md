@@ -53,11 +53,17 @@ Read these two first — most "obvious" changes wrong without context:
   name/provider/type/account id/email/timestamp/active hints. Access tokens, refresh
   tokens, API keys only through `SecretStore` (macOS Keychain/private file). About
   to put token-shaped string into `registry.py` or `models.AccountMeta`?
-  Stop.
+  Stop. One bounded exception: for a static-key account (which has no
+  account id) the `account_id` slot holds the API key's **last 4 characters**
+  as a "which key is this" hint — see `providers.common.key_account_hint`,
+  matching what providers show on their own key dashboards. 4 trailing chars
+  of a high-entropy key is not the credential; anything longer or
+  reconstructible is.
 - **No secrets in CLI output, logs, error messages.** `cli.py` truncates
-  account ids to last 4 chars, never prints token fields. Anything added to
-  CLI output needs same discipline — tests grep stdout/stderr for planted
-  secret values.
+  account ids to last 4 chars (and shows only a key's last 4 for static-key
+  accounts, per the exception above), never prints token fields. Anything
+  added to CLI output needs same discipline — tests grep stdout/stderr for
+  planted secret values.
 - **No custom cryptography.** Security model = macOS Keychain first with
   `chmod 0600` obfuscated files as sticky fallback; Linux always uses those
   private files — matches (not exceeds)
@@ -98,6 +104,9 @@ Read these two first — most "obvious" changes wrong without context:
 
 ## Project conventions
 
+- **Direct pushes to `main` are rejected.** The repo is public with branch
+  protection: every change goes through a branch + PR, gated on the `verify`
+  CI check. See `CONTRIBUTING.md`.
 - Python 3.12+, stdlib `argparse` (no Click/Typer), dataclasses over
   ad-hoc dicts, `from __future__ import annotations` everywhere.
 - `uv` for dependency mgmt (`uv sync --dev`, `uv run pytest`, `uv run
@@ -120,3 +129,6 @@ Read these two first — most "obvious" changes wrong without context:
 - `docs/security.md` — threat model, storage backend comparison.
 - `docs/testing.md` — testing strategy in depth.
 - `docs/roadmap.md` — milestone status (what's built, what's postponed).
+- `docs/releasing.md` — how to cut a CLI (PyPI) or TUI plugin (npm) release.
+- `CONTRIBUTING.md` — human contributor workflow (PR checklist, testing rules).
+- `SECURITY.md` — vulnerability reporting process.

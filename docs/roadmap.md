@@ -2,6 +2,10 @@
 
 ## What v1 does
 
+- Published on PyPI (`uv tool install opencode-swap` / `pipx install
+  opencode-swap` / `uvx opencode-swap`) and on npm
+  (`opencode plugin @leinardi/opencode-swap --global`) via OIDC trusted
+  publishing from GitHub Actions; see [`releasing.md`](releasing.md).
 - Secure per-account storage: macOS Keychain, or atomic `0600` files under a
   `0700` directory on Linux.
 - Imports the currently-active OpenCode account, with identity dedup and
@@ -19,6 +23,9 @@
   secret backend.
 - An optional OpenCode TUI plugin showing active account and usage in the
   session prompt, with account switching from the command palette.
+- Live usage lookup (`list --usage` / `status --usage`) for OpenAI ChatGPT
+  OAuth and the Z.AI GLM Coding Plan (`zai-coding-plan`), with window lengths
+  derived from the provider's response rather than hardcoded.
 - A test suite spanning unit, integration, failure injection, real
   multi-thread concurrency, compatibility, and security categories; see
   [`docs/testing.md`](testing.md).

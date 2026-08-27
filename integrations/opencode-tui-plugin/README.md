@@ -9,17 +9,16 @@ of credentials and account-switch transactions.
 
 ## Requirements
 
-This plugin's `status --json` parsing is pinned to `schema_version: 2`,
-introduced in `opencode-swap` 0.2.0 (OpenAI's 5h rate-limit window). It
-rejects responses from an older CLI outright rather than misreading them —
-keep the CLI at 0.2.0 or newer.
+This plugin's `status --json` parsing is pinned to `schema_version: 2`
+(OpenAI's 5h rate-limit window). It rejects responses from an older CLI
+outright rather than misreading them — keep the CLI at 0.3.0 or newer.
 
 ## Install from npm
 
 Install the Python CLI first, then install TUI package globally:
 
 ```bash
-uv tool install git+https://github.com/leinardi/opencode-swap.git
+uv tool install opencode-swap
 opencode plugin @leinardi/opencode-swap --global
 ```
 
@@ -70,11 +69,19 @@ by `uv`, the executable is normally `.venv/bin/opencode-swap`:
 
 By default, every 60-second refresh runs `opencode-swap status <provider>
 --json --usage` for the session's active provider when it's a managed
-account. That command sends **that account's live OAuth access token** as a
-`Bearer` header to `https://chatgpt.com/backend-api/wham/usage` (see
-`usage.py`), to fetch the usage percentage and reset time for every
-rate-limit window OpenAI reports (currently a 5-hour and a 7-day window)
-shown next to the account name.
+account. For a provider with a usage source, that command sends **that
+account's own live credential** as a `Bearer` header to the provider's usage
+endpoint (see `usage.py`), to fetch the usage percentage and reset time for
+every quota window the provider reports, shown next to the account name:
+
+- OpenAI ChatGPT OAuth → the OAuth access token to
+  `https://chatgpt.com/backend-api/wham/usage` (currently a 5-hour and a
+  7-day window).
+- Z.AI `zai-coding-plan` → the account API key to
+  `https://api.z.ai/api/monitor/usage/quota/limit` (GLM Coding Plan session
+  and weekly windows).
+
+Every other provider makes no usage request.
 
 Set `{ "usage": false }` in the plugin options (see above) to disable this:
 the widget then shows only the account name, and the plugin makes no network
@@ -84,11 +91,11 @@ which is fully local/offline.
 ## Behavior
 
 - Shows `<account> · 5h <usage>% @<reset> | 7d <usage>% @<reset>` at right
-  side of session prompt metadata, one entry per rate-limit window OpenAI
+  side of session prompt metadata, one entry per quota window the provider
   reports for the account -- labelled by that window's own duration, so it
-  adapts automatically if OpenAI reports one window, three, or a different
-  length. Each window is colored independently. When OpenAI supplies that
-  window's duration and reset time, usage color compares spend against linear
+  adapts automatically if the provider reports one window, three, or a
+  different length. Each window is colored independently. When the provider
+  supplies that window's duration and reset time, usage color compares spend against linear
   progress through that exact window: green below 85% of projection, orange
   below 105%, and red at or above 105% (the first 5% of the window always
   stays green). Without complete window data, absolute usage is green below

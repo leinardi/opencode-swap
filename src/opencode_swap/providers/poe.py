@@ -6,11 +6,20 @@ import time
 
 from opencode_swap.exceptions import SchemaError
 from opencode_swap.models import AccountDesc, AuthRecord, JsonObject, Validity
-from opencode_swap.providers.common import credential_values, extract_raw, is_json_number, published_raw, validate_api, validate_oauth
+from opencode_swap.providers.common import (
+    credential_values,
+    extract_raw,
+    is_json_number,
+    key_account_hint,
+    published_raw,
+    validate_api,
+    validate_oauth,
+)
 
 
 class PoeProvider:
     id = "poe"
+    usage_record_types: frozenset[str] = frozenset()  # no known usage endpoint
 
     def extract(self, auth: JsonObject) -> AuthRecord | None:
         raw = extract_raw(auth, self.id)
@@ -38,7 +47,7 @@ class PoeProvider:
 
     def describe(self, record: AuthRecord) -> AccountDesc:
         expires = record.raw.get("expires")
-        return AccountDesc(type=record.type, email=None, account_id=None, expires=expires if is_json_number(expires) else None)
+        return AccountDesc(type=record.type, email=None, account_id=key_account_hint(record), expires=expires if is_json_number(expires) else None)
 
     def validate(self, record: AuthRecord) -> Validity:
         if record.type == "api":
@@ -50,3 +59,6 @@ class PoeProvider:
 
     def refresh(self, record: AuthRecord) -> AuthRecord | None:
         return None  # no verified standalone refresh flow for this provider yet
+
+    def fetch_usage(self, record: AuthRecord) -> None:
+        return None  # unreachable: usage_record_types is empty

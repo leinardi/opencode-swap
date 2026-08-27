@@ -33,7 +33,8 @@ src/opencode_swap/
   opencode_auth.py     read/atomic-write of OpenCode's auth.json (whole-file, generic)
   providers/base.py    the Provider protocol (the one seam that varies per provider)
   providers/api.py     generic canonical API-key provider
-  providers/openai.py  OpenAI API/OAuth behavior
+  providers/openai.py  OpenAI API/OAuth behavior + ChatGPT usage lookup
+  providers/zai.py     generic API record + GLM Coding Plan usage lookup
   providers/*.py       OAuth behavior proven safe for specific providers
   oauth_jwt.py         JWT claim decoding (accountId/email extraction) — no network
   paths.py             resolves OpenCode's auth.json path and opencode-swap's own data dir
@@ -83,12 +84,23 @@ class Provider(Protocol):
     def credential_values(self, record: AuthRecord) -> set[str]
     def describe(self, record: AuthRecord) -> AccountDesc
     def validate(self, record: AuthRecord) -> Validity
+    def refresh(self, record: AuthRecord) -> AuthRecord | None
+    usage_record_types: frozenset[str]
+    def fetch_usage(self, record: AuthRecord) -> UsageSnapshot | None
 ```
 
 This is deliberately the *smallest* interface that made the real OpenAI
 provider implementation possible — it was derived from what
 `providers/openai.py` actually needed, not designed speculatively for
-providers that don't exist yet. In particular there's no
+providers that don't exist yet.
+
+Live usage lookup is part of this seam, not a branch in `Switcher`:
+`usage_record_types` declares which record types a provider can look up (empty
+for most, so `Switcher.fetch_usage` skips all lock/refresh work and reports
+`usage: n/a`), and `fetch_usage` performs the provider-specific network call
+(`providers/openai.py` → ChatGPT, `providers/zai.py` → the GLM Coding Plan
+quota endpoint). The shared `Switcher.fetch_usage` still owns live-record
+attribution, sync-back, and standalone-refresh gating around it. In particular there's no
 `DiscoverActiveCredentials`/`ActivateAccount` ceremony: the whole-file
 read/write is generic (`opencode_auth.py`), so a provider only needs to
 know how to read and write *its own* corner of the file.

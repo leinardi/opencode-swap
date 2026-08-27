@@ -1,4 +1,5 @@
 import json
+import re
 import stat
 import time
 
@@ -288,6 +289,40 @@ def test_refresh_reports_ambiguous_state_distinctly_and_exits_nonzero(tmp_path, 
     assert "could not be confirmed" in out
 
 
+def test_usage_columns_align_across_rows_with_different_digit_counts():
+    snaps = [
+        UsageSnapshot(
+            available=True,
+            plan_name="Plan A",
+            windows=(
+                UsageWindow(used_percent=8, reset_at=None, window_seconds=5 * 3600),
+                UsageWindow(used_percent=100, reset_at=None, window_seconds=7 * 86_400),
+            ),
+        ),
+        UsageSnapshot(
+            available=True,
+            plan_name="Plan B",
+            windows=(
+                UsageWindow(used_percent=100, reset_at=None, window_seconds=5 * 3600),
+                UsageWindow(used_percent=3, reset_at=None, window_seconds=7 * 86_400),
+            ),
+        ),
+    ]
+    widths = cli._usage_column_widths(snaps)
+    lines = [cli._format_usage(snap, widths) for snap in snaps]
+
+    assert lines[0] == "  usage: 5h   8% | 7d 100%, Plan A"
+    assert lines[1] == "  usage: 5h 100% | 7d   3%, Plan B"
+    # the " | " separator and the plan-name comma land in the same column
+    assert len({line.index(" | ") for line in lines}) == 1
+    assert len({line.index(", Plan") for line in lines}) == 1
+
+
+def test_format_usage_without_widths_is_unpadded():
+    snap = UsageSnapshot(available=True, windows=(UsageWindow(used_percent=8, reset_at=None, window_seconds=5 * 3600),))
+    assert cli._format_usage(snap) == "  usage: 5h 8%"
+
+
 def test_format_usage_shows_both_windows(monkeypatch):
     monkeypatch.setattr(cli.time, "time", lambda: 1_751_310_000)
     output = cli._format_usage(
@@ -337,6 +372,103 @@ def test_list_usage_flag_never_prints_secrets(tmp_path, monkeypatch, capsys):
     )
     cli.main(["list", "--usage"])
     assert "super-secret-refresh-token" not in capsys.readouterr().out
+
+
+class _FakeResponse:
+    def __init__(self, body: bytes):
+        self._body = body
+
+    def read(self):
+        return self._body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+_ZAI_QUOTA_BODY = json.dumps(
+    {
+        "code": 200,
+        "data": {
+            "level": "lite",
+            "limits": [
+                {"type": "CREDIT_LIMIT", "unit": 3, "number": 5, "percentage": 8, "nextResetTime": 1787862798247},
+                {"type": "CREDIT_LIMIT", "unit": 6, "number": 1, "percentage": 12, "nextResetTime": 1788357330998},
+            ],
+        },
+        "success": True,
+    }
+).encode()
+
+
+def test_list_usage_flag_renders_zai_windows_from_payload_and_hides_key(tmp_path, monkeypatch, capsys):
+    write_live_account(tmp_path, extra={"zai-coding-plan": {"type": "api", "key": "zai-planted-secret-key"}})
+    assert cli.main(["add", "zai-coding-plan", "glm"]) == 0
+    capsys.readouterr()
+
+    monkeypatch.setattr("opencode_swap.usage.urllib.request.urlopen", lambda *a, **k: _FakeResponse(_ZAI_QUOTA_BODY))
+    assert cli.main(["list", "--usage"]) == 0
+    out = capsys.readouterr().out
+    assert "5h 8%" in out and "7d 12%" in out
+    assert "GLM Coding Lite" in out
+    assert "zai-planted-secret-key" not in out
+
+
+def test_status_json_usage_reports_zai_windows(tmp_path, monkeypatch, capsys):
+    write_live_account(tmp_path, extra={"zai-coding-plan": {"type": "api", "key": "zk"}})
+    assert cli.main(["add", "zai-coding-plan", "glm"]) == 0
+    capsys.readouterr()
+
+    monkeypatch.setattr("opencode_swap.usage.urllib.request.urlopen", lambda *a, **k: _FakeResponse(_ZAI_QUOTA_BODY))
+    assert cli.main(["status", "zai-coding-plan", "--json", "--usage"]) == 0
+    usage_block = json.loads(capsys.readouterr().out)["providers"][0]["usage"]
+    assert usage_block["available"] is True
+    assert usage_block["plan_name"] == "GLM Coding Lite"
+    assert [w["window_seconds"] for w in usage_block["windows"]] == [18000, 604800]
+
+
+def test_list_shows_api_key_last_four_in_the_account_column_not_the_key(tmp_path, capsys):
+    write_live_account(tmp_path, extra={"zai-coding-plan": {"type": "api", "key": "zai-full-secret-example-KEY9"}})
+    assert cli.main(["add", "zai-coding-plan", "glm"]) == 0
+    capsys.readouterr()
+
+    assert cli.main(["list"]) == 0
+    out = capsys.readouterr().out
+    assert "...KEY9" in out
+    assert "zai-full-secret-example" not in out
+
+
+def test_list_account_column_hint_is_live_even_for_an_account_added_before_the_feature(tmp_path, capsys):
+    write_live_account(tmp_path, extra={"zai-coding-plan": {"type": "api", "key": "zai-full-secret-example-KEY9"}})
+    assert cli.main(["add", "zai-coding-plan", "glm"]) == 0
+
+    # simulate a pre-feature registry row: account_id never captured
+    data_root = tmp_path / "opencode-swap"
+    switcher = Switcher(opencode_auth_path=auth_path(tmp_path), data_root=data_root, platform=Platform.UNKNOWN)
+    meta = switcher.registry.scoped_accounts()[("zai-coding-plan", "glm")]
+    switcher.registry.upsert_account(AccountMeta(meta.name, meta.provider, meta.type, None, meta.email, meta.added))
+    capsys.readouterr()
+
+    assert cli.main(["list"]) == 0
+    assert "...KEY9" in capsys.readouterr().out
+
+
+def test_list_columns_stay_aligned_when_a_provider_id_is_longer_than_the_default_width(tmp_path, capsys):
+    write_live_account(tmp_path, account_id="acct-1", extra={"a-very-long-custom-provider-id": {"type": "api", "key": "short-key"}})
+    assert cli.main(["add", "openai", "work"]) == 0
+    assert cli.main(["add", "a-very-long-custom-provider-id", "also"]) == 0
+    capsys.readouterr()
+
+    assert cli.main(["list"]) == 0
+    lines = [line for line in capsys.readouterr().out.splitlines() if line.strip()]
+    assert len(lines) == 2
+    # the (fixed-width, 8-char) account-id column starts at the same offset
+    # on both rows despite the long custom provider id widening its column
+    matches = [re.match(r"^[*\s] (\S+)\s+(\S+)\s+(\S+)\s+", line) for line in lines]
+    assert all(matches)
+    assert len({m.start(3) for m in matches}) == 1
 
 
 def test_list_never_prints_secrets(tmp_path, capsys):

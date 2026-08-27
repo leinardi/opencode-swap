@@ -33,6 +33,7 @@ records while requiring explicit implementations for OAuth.
 | Poe API/OAuth | ⚠️ Supported; testers wanted | Browser flow yields API key; no refresh rotation |
 | xAI API | ⚠️ Supported; testers wanted | Canonical API record |
 | xAI OAuth | ⚠️ Guarded support; testers wanted | Rotates tokens; accepted only when access JWT has stable `iss` and `sub` |
+| Z.AI GLM Coding Plan (`zai-coding-plan`) | ⚠️ Supported; testers wanted | Canonical API record; `list --usage` also reads the GLM Coding Plan quota endpoint |
 | DigitalOcean | ⚠️ Generic API support; testers wanted | Browser OAuth result is stored as API record; metadata may change |
 | Azure/Cloudflare/Snowflake PAT/GitLab PAT/Bedrock/SAP | ⚠️ Generic API support; testers wanted | Canonical API record, sometimes with required metadata |
 | GitLab OAuth | ❌ Unsupported | Refresh rotates; stored record has no provably stable user identity |
@@ -43,6 +44,26 @@ records while requiring explicit implementations for OAuth.
 Failing closed matters: assigning a rotated but unidentifiable live credential
 to wrong saved account could destroy that saved account's previous credential.
 Unsupported OAuth records raise `SchemaError` before live state is overwritten.
+
+## Live usage lookup
+
+`list --usage` / `status --usage` fetch a live quota snapshot for providers
+that expose one. This is opt-in per invocation — a plain `list` / `status` is
+fully offline. For a saved OpenAI OAuth account that is *not* the one OpenCode
+currently has live, an expired stored token is refreshed first (a `POST` to
+OpenAI's token endpoint via `oauth_refresh.py`) before the usage `GET`;
+otherwise the usage request is the only call. Coverage:
+
+| Provider | Endpoint | Auth sent |
+| --- | --- | --- |
+| OpenAI ChatGPT OAuth | `https://chatgpt.com/backend-api/wham/usage` | account access token (Bearer) + `ChatGPT-Account-Id` |
+| Z.AI `zai-coding-plan` | `https://api.z.ai/api/monitor/usage/quota/limit` | account API key (Bearer) |
+
+Window lengths are read from the response, never hardcoded: OpenAI's from
+`limit_window_seconds`, Z.AI's from the `unit`/`number` pair on each
+`CREDIT_LIMIT` entry (`unit` 3=hour, 4=day, 5=month, 6=week). A plain `zai`
+pay-as-you-go key is not registered — the quota endpoint is coding-plan-only.
+Every other provider reports `usage: n/a`.
 
 ## Source evidence
 

@@ -9,12 +9,14 @@ from opencode_swap.providers.github_copilot import GitHubCopilotProvider
 from opencode_swap.providers.openai import OpenAiProvider
 from opencode_swap.providers.poe import PoeProvider
 from opencode_swap.providers.xai import XaiProvider
+from opencode_swap.providers.zai import ZaiProvider
 
 PROVIDERS: dict[str, Provider] = {
     "openai": OpenAiProvider(),
     "github-copilot": GitHubCopilotProvider(),
     "poe": PoeProvider(),
     "xai": XaiProvider(),
+    "zai-coding-plan": ZaiProvider(),
 }
 
 

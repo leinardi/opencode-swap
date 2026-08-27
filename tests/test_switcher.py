@@ -505,6 +505,29 @@ def test_fetch_usage_delegates_with_access_and_account_id(switcher, monkeypatch)
     assert captured["access"]  # the stored access token was passed through
 
 
+def test_fetch_usage_delegates_zai_api_key(switcher, monkeypatch):
+    write_auth(switcher.opencode_auth_path, extra={"zai-coding-plan": {"type": "api", "key": "zai-secret-key"}})
+    switcher.add_account("work", provider_id="zai-coding-plan")
+
+    captured = {}
+    monkeypatch.setattr(
+        "opencode_swap.usage.fetch_zai_usage",
+        lambda api_key: (captured.__setitem__("key", api_key), "sentinel")[1],
+    )
+    result = switcher.fetch_usage("work", provider_id="zai-coding-plan")
+    assert result == "sentinel"
+    assert captured["key"] == "zai-secret-key"
+
+
+def test_fetch_usage_none_for_openai_api_key_even_though_zai_api_keys_work(switcher):
+    """The usage gate is per-provider (usage_record_types), not a blanket
+    'api records have no usage' rule -- an OpenAI api account still returns
+    None while a zai-coding-plan api account does not."""
+    write_auth(switcher.opencode_auth_path, {"type": "api", "key": "sk-abc"})
+    switcher.add_account("work")
+    assert switcher.fetch_usage("work") is None
+
+
 def test_fetch_usage_prefers_live_record_for_active_account_even_if_stored_is_stale(switcher, monkeypatch):
     """OpenCode rotates tokens in auth.json in place; a healthy active
     account must not be treated as expired just because opencode-swap's

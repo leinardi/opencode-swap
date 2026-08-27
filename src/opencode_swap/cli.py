@@ -13,6 +13,7 @@ import json
 import math
 import sys
 import time
+from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
 
@@ -44,7 +45,7 @@ def _build_parser() -> argparse.ArgumentParser:
     list_p.add_argument(
         "--usage",
         action="store_true",
-        help="fetch OpenAI/ChatGPT usage where supported (network calls; off by default)",
+        help="fetch live usage where supported (OpenAI OAuth, Z.AI GLM Coding Plan; network calls; off by default)",
     )
     current_p = subparsers.add_parser("current", help="show which managed accounts are active")
     current_p.add_argument("provider", nargs="?", help="optional provider id filter")
@@ -168,6 +169,8 @@ def cmd_list(switcher: Switcher, args: argparse.Namespace) -> int:
 
     active_by_provider = {provider_id: switcher.current(provider_id)[0] for provider_id in {meta.provider for meta in accounts.values()}}
     validity_tag = {Validity.OK: "", Validity.EXPIRED: " (expired)", Validity.INVALID: " (invalid!)"}
+
+    rows = []
     for provider_id, name in sorted(accounts):
         meta = accounts[(provider_id, name)]
         active = active_by_provider[provider_id]
@@ -176,9 +179,34 @@ def cmd_list(switcher: Switcher, args: argparse.Namespace) -> int:
         # reading validity, so a successful --usage refresh is reflected in
         # the validity tag on the same line rather than showing a stale
         # "(expired)" next to freshly-fetched numbers.
-        usage_suffix = _format_usage(switcher.fetch_usage(name, provider_id=provider_id)) if args.usage else ""
-        validity = switcher.account_validity(name, provider_id=provider_id)
-        line = f"{marker} {provider_id:<22} {name:<20} {_redact_account_id(meta.account_id):<8} {meta.email or '-':<28}{validity_tag[validity]}{usage_suffix}"
+        snapshot = switcher.fetch_usage(name, provider_id=provider_id) if args.usage else None
+        validity, desc = switcher.account_status(name, provider_id=provider_id)
+        # A static-key provider has no account id; describe() fills the slot
+        # with a last-4 key hint instead. Prefer the live value over whatever
+        # the registry captured at add time.
+        account_id = _redact_account_id((desc.account_id if desc else None) or meta.account_id)
+        email = meta.email or "-"
+        rows.append((marker, provider_id, name, account_id, email, validity, snapshot))
+
+    # Column widths float up to fit whatever is actually being printed
+    # (provider ids, account names, and emails are arbitrary-length user
+    # data, unlike the redacted account-id column, which _redact_account_id
+    # already bounds) -- floored at today's defaults so a short list renders
+    # exactly as before.
+    provider_w = max(22, *(len(provider_id) for _, provider_id, *_ in rows))
+    name_w = max(20, *(len(name) for _, _, name, *_ in rows))
+    email_w = max(28, *(len(email) for *_, email, _, _ in rows))
+
+    # Column-align the usage block across rows: pad the validity tag to a
+    # common width so every "usage:" starts in the same place, and pass the
+    # per-window field widths to _format_usage.
+    widths = _usage_column_widths(snapshot for *_, snapshot in rows) if args.usage else None
+    tag_width = max((len(validity_tag[validity]) for *_, validity, _ in rows), default=0) if args.usage else 0
+
+    for marker, provider_id, name, account_id, email, validity, snapshot in rows:
+        tag = f"{validity_tag[validity]:<{tag_width}}" if tag_width else validity_tag[validity]
+        usage_suffix = _format_usage(snapshot, widths) if args.usage else ""
+        line = f"{marker} {provider_id:<{provider_w}} {name:<{name_w}} {account_id:<8} {email:<{email_w}}{tag}{usage_suffix}"
         print(line)
     return 0
 
@@ -217,7 +245,10 @@ def _format_reset(reset_at: object) -> str | None:
     return f"{reset_time:%b} {reset_time.day}, {reset_time:%H:%M}"
 
 
-def _format_window(window: UsageWindow) -> str | None:
+def _window_parts(window: UsageWindow) -> tuple[str, str, str] | None:
+    """Raw `(label, percent, reset)` pieces for one window, or None when the
+    percent is unusable. `label` and `reset` may be empty strings; `reset`
+    keeps its leading ``@``."""
     used_percent = window.used_percent
     try:
         valid_percent = isinstance(used_percent, (int, float)) and not isinstance(used_percent, bool) and math.isfinite(used_percent)
@@ -225,25 +256,51 @@ def _format_window(window: UsageWindow) -> str | None:
         valid_percent = False
     if not valid_percent:
         return None
-    text = f"{used_percent:.0f}%"
-    label = _window_label(window.window_seconds)
-    if label:
-        text = f"{label} {text}"
+    label = _window_label(window.window_seconds) or ""
     reset = _format_reset(window.reset_at)
-    if reset:
-        text = f"{text} @{reset}"
-    return text
+    return (label, f"{used_percent:.0f}%", f"@{reset}" if reset else "")
 
 
-def _format_usage(snapshot: UsageSnapshot | None) -> str:
+def _format_window(window: UsageWindow, widths: tuple[int, int, int] | None = None) -> str | None:
+    parts = _window_parts(window)
+    if parts is None:
+        return None
+    label, percent, reset = parts
+    if widths is None:
+        text = f"{label} {percent}" if label else percent
+        return f"{text} {reset}" if reset else text
+    label_w, percent_w, reset_w = widths
+    text = f"{label:>{label_w}} {percent:>{percent_w}}" if label_w else f"{percent:>{percent_w}}"
+    return f"{text} {reset:<{reset_w}}" if reset_w else text
+
+
+def _usage_column_widths(snapshots: Iterable[UsageSnapshot | None]) -> dict[int, tuple[int, int, int]]:
+    """Per-window-position max widths of `(label, percent, reset)` across
+    every snapshot being listed, so `list --usage` can column-align them."""
+    widths: dict[int, tuple[int, int, int]] = {}
+    for snapshot in snapshots:
+        if snapshot is None or not snapshot.available:
+            continue
+        for index, window in enumerate(snapshot.windows):
+            parts = _window_parts(window)
+            if parts is None:
+                continue
+            have = widths.get(index, (0, 0, 0))
+            widths[index] = tuple(max(a, len(b)) for a, b in zip(have, parts, strict=True))  # type: ignore[assignment]
+    return widths
+
+
+def _format_usage(snapshot: UsageSnapshot | None, widths: dict[int, tuple[int, int, int]] | None = None) -> str:
     if snapshot is None:
         return "  usage: n/a"
     if not snapshot.available:
         return f"  usage: unavailable ({snapshot.message})"
-    parts = [text for window in snapshot.windows if (text := _format_window(window)) is not None]
+    parts = [text for index, window in enumerate(snapshot.windows) if (text := _format_window(window, (widths or {}).get(index))) is not None]
     if not parts:
         return "  usage: n/a"
-    windows_text = " | ".join(parts)
+    # Inner windows keep their trailing pad so the " | " separators line up;
+    # only the last segment's pad is trimmed before the plan name / EOL.
+    windows_text = " | ".join(parts).rstrip()
     if snapshot.plan_name:
         windows_text = f"{windows_text}, {snapshot.plan_name}"
     return "  usage: " + windows_text
@@ -459,7 +516,7 @@ def cmd_current(switcher: Switcher, args: argparse.Namespace) -> int:
         elif meta is None:
             print(f"{provider_id}: active account opencode-swap doesn't manage ({_redact_account_id(desc.account_id)})")
         else:
-            print(f"{provider_id}: {meta.name} ({meta.email or 'no email'}, account {_redact_account_id(meta.account_id)})")
+            print(f"{provider_id}: {meta.name} ({meta.email or 'no email'}, account {_redact_account_id(desc.account_id or meta.account_id)})")
     return 1 if incompatible else 0
 
 
