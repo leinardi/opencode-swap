@@ -51,12 +51,32 @@ covers the storage trade-offs each approach makes.
 
 ## Install
 
+Two pieces ship from this repo: the CLI, which does all the work, and an
+optional OpenCode TUI plugin that surfaces it inside the TUI. Install the CLI
+first — the plugin shells out to it.
+
+### 1. CLI (required)
+
 ```bash
 uv tool install opencode-swap     # or: pipx install opencode-swap
 opencode-swap --help
 ```
 
 `uvx opencode-swap --help` works too, without installing anything permanently.
+
+### 2. OpenCode TUI plugin (optional)
+
+Adds the active account and its usage to the session prompt, plus `/swap`,
+`/swap-next`, and `/swap-refresh` in the command palette:
+
+```bash
+opencode plugin @leinardi/opencode-swap --global
+```
+
+Restart OpenCode afterwards. The plugin invokes `opencode-swap` from your
+`PATH`, so it needs the CLI from step 1 already installed. See
+[OpenCode TUI integration](#opencode-tui-integration) for what it renders and
+when it stays hidden.
 
 ### From source
 
@@ -127,9 +147,7 @@ ids are shown truncated to their last four characters.
 
 ## OpenCode TUI integration
 
-```bash
-opencode plugin @leinardi/opencode-swap --global
-```
+Install it with [step 2 of Install](#2-opencode-tui-plugin-optional).
 
 [`integrations/opencode-tui-plugin`](https://github.com/leinardi/opencode-swap/blob/main/integrations/opencode-tui-plugin)
 uses OpenCode's supported TUI-plugin API to render active account and
