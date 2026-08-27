@@ -1,106 +1,93 @@
 # Releasing
 
-This project ships two independently-versioned packages from one repo: the
-Python CLI (PyPI) and the optional npm TUI plugin. **Release the CLI first** —
-the plugin's own install docs tell users to install the CLI before the
-plugin, and `integrations/opencode-tui-plugin/README.md` pins a minimum CLI
-version.
+This project ships two packages from one repo — the Python CLI (PyPI) and
+the optional npm TUI plugin — bumped and released **in lockstep**, one
+version for both.
 
-Both releases go through this repo's `Release` workflow
-(`.github/workflows/release.yaml`, `workflow_dispatch` →
-`leinardi/gh-reusable-workflows/.github/workflows/simple-tag-and-release.yaml@v1`),
-which creates the git tag and GitHub release at the dispatched commit. Tags
-are immutable once pushed (see the repo's tag-protection ruleset) — get the
-version right before dispatching.
+## Cutting a release
 
-## Python CLI (PyPI)
+1. Dispatch the **Release** workflow (`.github/workflows/release.yaml`) with
+   the new version (e.g. `0.4.0`, with or without a leading `v`).
+2. Its `bump` job checks out `main`, bumps `pyproject.toml`,
+   `src/opencode_swap/__init__.py`, and
+   `integrations/opencode-tui-plugin/package.json` to that version,
+   regenerates `uv.lock` and `bun.lock`, pushes a `release/v<version>`
+   branch, and opens a PR. It also explicitly dispatches `ci.yml` and
+   `pr-lint.yml` against that branch — a bot-authored push/PR does not fire
+   other workflows' `push`/`pull_request` triggers on its own (GitHub's
+   loop-prevention), so without this the PR's required `verify` check would
+   never appear.
+3. **Review the diff and merge the PR** the same way as any other PR (the
+   existing admin bypass-merge, since self-approval is impossible under
+   `CODEOWNERS` + required review). This is the one manual step in the whole
+   flow, and deliberately so — a human looks at the diff right before
+   anything publishes.
+4. That merge is an ordinary push to `main`. `.github/workflows/auto-tag-release.yml`
+   runs on every push to `main`, but only acts on the one that actually
+   changed `pyproject.toml`'s version (every other push — a bugfix, a
+   Dependabot merge, this very PR's own merge before any version bump has
+   ever happened — no-ops instantly). When it detects a version change, it:
+   - creates tags `v<version>` and `tui-v<version>` at that commit (tag
+     creation isn't covered by the branch-protection ruleset — only
+     `refs/heads/*` is — so this needs no bypass, no PAT, just
+     `GITHUB_TOKEN` with `contents: write`)
+   - creates both GitHub releases with generated notes
+   - explicitly dispatches `publish-pypi.yml` and `publish-tui-plugin.yml`
+     against their respective tags (same loop-prevention workaround as
+     step 2 — a `GITHUB_TOKEN`-pushed tag wouldn't fire their `push: tags:`
+     triggers on its own; dispatching `workflow_dispatch` against the tag
+     ref gives them the same `ref`/`ref_type` context a real tag push would)
+5. Both publish workflows run independently: `publish-pypi.yml` re-verifies
+   the tag matches `pyproject.toml`, runs the test suite, builds the wheel
+   and sdist, publishes to PyPI via OIDC trusted publishing (no token, PEP
+   740 attestations), and attaches the built artifacts to its GitHub
+   release. `publish-tui-plugin.yml` typechecks, validates the npm payload,
+   and publishes through npm OIDC with provenance.
 
-### Before first publish
+Net effect: type a version once, review one PR, click merge once — both
+tags, both GitHub releases, and both package publishes cascade
+automatically. Tags are immutable once pushed (see the repo's tag-protection
+ruleset), so get the version right before dispatching.
 
-1. On [pypi.org](https://pypi.org), add a pending publisher for project
-   `opencode-swap`: owner `leinardi`, repository `opencode-swap`, workflow
-   `publish-pypi.yml`, environment `pypi`.
-2. Create a GitHub environment named `pypi` in repo settings (no secrets
-   needed — it only scopes the OIDC claim).
+`workflow_dispatch` remains available directly on `publish-pypi.yml` and
+`publish-tui-plugin.yml` too, for a manual re-run; both refuse to publish a
+version that's already live on their registry.
 
-### Release
+Neither publish workflow has a stored token — trusted publishing (OIDC) is
+required for both; do not replace either with a long-lived
+`PYPI_API_TOKEN`/`NPM_TOKEN`.
 
-1. Bump the version in lockstep:
-   - `pyproject.toml` (`project.version`)
-   - `src/opencode_swap/__init__.py` (`__version__`)
-2. Run `make clean && make verify` locally.
-3. Commit the version bump and open a PR (branch protection requires it);
-   merge once `verify` is green.
-4. Dispatch **Release** with the new semver (e.g. `0.3.0`, with or without
-   leading `v`) — this tags `v<version>` at the merged commit and creates a
-   GitHub release with generated notes.
-5. The tag push triggers `.github/workflows/publish-pypi.yml`: it re-verifies
-   the tag matches `pyproject.toml`, runs the test suite, builds the wheel and
-   sdist, publishes to PyPI via OIDC trusted publishing (no token, PEP 740
-   attestations), and attaches the built artifacts to the GitHub release.
+## One-time setup (already done for this repo)
 
-`workflow_dispatch` is also available on `publish-pypi.yml` directly for a
-manual re-run; it refuses to publish a version that's already on PyPI.
+Kept here as reference for what makes the above possible, not something to
+repeat per release.
 
-The workflow has no `PYPI_API_TOKEN`. Trusted publishing is required; do not
-replace it with a long-lived token.
+**PyPI**: a pending publisher was registered on [pypi.org](https://pypi.org)
+for project `opencode-swap` (owner `leinardi`, repository `opencode-swap`,
+workflow `publish-pypi.yml`, environment `pypi`), and a matching `pypi`
+GitHub environment was created (no secrets — it only scopes the OIDC claim).
 
-## OpenCode TUI plugin (npm)
+**npm**: unlike PyPI, npm has no pending-publisher concept — the Trusted
+Publisher can only be attached to a package that already exists, so this
+needed a one-time manual publish first:
 
-### Before first publish
+```bash
+cd integrations/opencode-tui-plugin
+npm login                      # as the personal npm user "leinardi" —
+                                # @leinardi is that account's free scope,
+                                # no npm Organization needed
+bun install --frozen-lockfile
+npm publish --ignore-scripts   # publishConfig.access: public already set
+npm logout
+```
 
-Unlike PyPI, npm has no "pending publisher" for a package that doesn't exist
-yet — the trusted publisher lives on the package's own Settings page, so the
-package needs a first, manual publish before it can be configured:
+Then, on `https://www.npmjs.com/package/@leinardi/opencode-swap/access`, a
+Trusted Publisher was added: GitHub Actions, owner `leinardi`, repository
+`opencode-swap`, workflow `publish-tui-plugin.yml`, environment `npm`,
+two-factor authentication required with bypass tokens disallowed.
 
-1. `@leinardi` is a personal npm username scope, free for public packages
-   with no organization needed — do not create or convert to an npm
-   Organization for this.
-2. Create a GitHub environment named `npm` in repo settings (no secrets
-   needed — it only scopes the OIDC claim).
-3. One-time manual publish to create the package:
-
-   ```bash
-   cd integrations/opencode-tui-plugin
-   npm login
-   bun install --frozen-lockfile
-   npm publish --ignore-scripts   # publishConfig.access: public is already set
-   npm logout
-   ```
-
-4. On `https://www.npmjs.com/package/@leinardi/opencode-swap/access`, add a
-   Trusted Publisher:
-    - Publisher: GitHub Actions
-    - Organization or user: `leinardi`
-    - Repository: `opencode-swap`
-    - Workflow filename: `publish-tui-plugin.yml`
-    - Environment name: `npm`
-    - Publishing access: require two-factor authentication and disallow
-      bypass 2FA tokens.
-5. Run `make verify` with Bun 1.3.14.
-6. Review `npm pack --dry-run` output from
-   `make tui-plugin-package-check`.
-
-From then on, every release goes through `publish-tui-plugin.yml`'s OIDC —
-no personal token or login is used again.
-
-### Release
-
-1. Update `integrations/opencode-tui-plugin/package.json` version. Keep it in
-   step with the CLI version for any release where both ship together;
-   `cli.py`'s `schema_version` compatibility contract is what actually lets
-   them drift apart later.
-2. Regenerate lockfile: `bun install --cwd integrations/opencode-tui-plugin`.
-3. Commit version and lockfile changes, open a PR, merge once `verify` is
-   green.
-4. Tag exact merged commit as `tui-v<package-version>` (via the `Release`
-   workflow, or manually).
-5. Push tag. `publish-tui-plugin.yml` typechecks, validates payload, then
-   publishes through npm OIDC with provenance and creates a GitHub release.
-
-`workflow_dispatch` is also available for intentional manual releases. It
-uses the package version in checked-out source and refuses an existing npm
-version.
-
-The workflow has no npm token. Trusted publishing is required; do not replace
-it with a long-lived `NPM_TOKEN`.
+**Repo settings**: "Allow GitHub Actions to create and approve pull
+requests" is enabled (Settings → Actions → General → Workflow permissions) —
+required for `release.yaml`'s `bump` job to open its PR. This only permits
+opening a PR via `GITHUB_TOKEN`; merging still always requires the same
+manual bypass-merge as any other PR.

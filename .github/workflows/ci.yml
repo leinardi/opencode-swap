@@ -5,6 +5,12 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # Needed so release.yaml's bump-and-PR job can explicitly dispatch this
+  # against its branch: a GITHUB_TOKEN-authored push/PR does not fire other
+  # workflows' push/pull_request triggers (GitHub's loop-prevention), so
+  # without an explicit `gh workflow run ci.yml --ref <branch>` the PR's
+  # required `verify` check would never appear.
+  workflow_dispatch:
 
 permissions:
   contents: read

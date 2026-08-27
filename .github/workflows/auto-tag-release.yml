@@ -1,0 +1,73 @@
+name: Auto Tag Release
+
+# Fires on every push to main, but only acts on the one that actually
+# changed pyproject.toml's version (release.yaml's bump-and-PR flow, or any
+# future manual bump) - every other push exits at the first check below.
+# Tag creation is not covered by the branch-protection ruleset (only
+# refs/heads/* is), so plain GITHUB_TOKEN with contents: write is enough;
+# no bypass or PAT needed. See docs/releasing.md.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  auto-tag-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      # For the `gh workflow run` dispatches below - see release.yaml's
+      # comment on the same GITHUB_TOKEN loop-prevention behavior. A tag
+      # pushed by this job's own GITHUB_TOKEN would not itself fire
+      # publish-pypi.yml/publish-tui-plugin.yml's `push: tags:` trigger.
+      actions: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+
+      - name: Detect a version bump
+        id: detect
+        run: |
+          set -euo pipefail
+          CURRENT=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          if git rev-parse HEAD~1 >/dev/null 2>&1; then
+            PREVIOUS=$(git show HEAD~1:pyproject.toml | python3 -c "import sys, tomllib; print(tomllib.loads(sys.stdin.read())['project']['version'])")
+          else
+            PREVIOUS=""
+          fi
+          if [ "$CURRENT" = "$PREVIOUS" ]; then
+            echo "Version unchanged ($CURRENT) - not a release commit."
+            echo "bumped=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Version changed: $PREVIOUS -> $CURRENT."
+            echo "bumped=true" >> "$GITHUB_OUTPUT"
+            echo "version=$CURRENT" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Tag, release, and publish
+        if: steps.detect.outputs.bumped == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.detect.outputs.version }}
+        run: |
+          set -euo pipefail
+          declare -A workflow_for_tag=(
+            ["v$VERSION"]="publish-pypi.yml"
+            ["tui-v$VERSION"]="publish-tui-plugin.yml"
+          )
+          for tag in "v$VERSION" "tui-v$VERSION"; do
+            if gh api "repos/${{ github.repository }}/git/refs/tags/$tag" >/dev/null 2>&1; then
+              echo "$tag already exists - skipping (safe re-run)."
+              continue
+            fi
+            git tag "$tag"
+            git push origin "$tag"
+            gh release create "$tag" --generate-notes
+            # workflow_dispatch against the tag ref runs with the same
+            # ref/ref_type context a real tag push would have, sidestepping
+            # the loop-prevention limitation noted above.
+            gh workflow run "${workflow_for_tag[$tag]}" --ref "$tag"
+          done
