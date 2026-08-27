@@ -21,20 +21,22 @@
     "account-switcher"
   ],
   "scripts": {
+    "build": "bun scripts/build.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src --max-warnings 0",
     "lint:fix": "eslint src --fix --max-warnings 0",
     "pack:check": "npm pack --dry-run --ignore-scripts",
     "check": "bun run typecheck && bun run lint && bun run pack:check",
-    "prepublishOnly": "bun run check"
+    "prepublishOnly": "bun run build && bun run check"
   },
   "files": [
+    "dist/tui.js",
     "src/tui.tsx",
     "README.md",
     "LICENSE"
   ],
   "exports": {
-    "./tui": "./src/tui.tsx"
+    "./tui": "./dist/tui.js"
   },
   "engines": {
     "node": ">=20",
