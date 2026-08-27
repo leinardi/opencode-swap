@@ -94,9 +94,9 @@ tokens in place; it won't create a duplicate.
 | Command | Description |
 | --- | --- |
 | `opencode-swap add <provider> <name>` | Import the provider's currently-active account under `<name>`. |
-| `opencode-swap list [provider]` | List every saved account, or filter by provider. |
+| `opencode-swap list [provider] [--usage]` | List every saved account, or filter by provider; `--usage` adds a live quota line where supported (OpenAI ChatGPT OAuth, Z.AI `zai-coding-plan`; network, opt-in). |
 | `opencode-swap current [provider]` | Show active managed accounts for every provider, or one provider. |
-| `opencode-swap status [provider] [--json] [--usage]` | Show integration status; `--json` emits versioned secret-safe data. |
+| `opencode-swap status [provider] [--json] [--usage]` | Show integration status; `--json` emits versioned secret-safe data; `--usage` as for `list`. |
 | `opencode-swap use <provider> <name> [-y]` | Activate one saved provider account. |
 | `opencode-swap switch <provider> [-y]` | Switch to next saved account for provider. |
 | `opencode-swap refresh <provider> [name]` | Ensure a saved account's OAuth token is valid, refreshing over the network if expired (no-op if already valid); every saved account for the provider if `name` is omitted. Never refreshes whichever account is currently active in OpenCode — that account's own next request handles its refresh. |
@@ -180,6 +180,7 @@ credentials, but use the same atomic switching path.
 | GitHub Copilot OAuth | ⚠️ Supported from OpenCode source analysis; testers wanted |
 | Poe API/OAuth | ⚠️ Supported from pinned plugin source analysis; testers wanted |
 | xAI API/OAuth | ⚠️ API supported; OAuth requires access JWT with stable `iss`/`sub`; testers wanted |
+| Z.AI GLM Coding Plan (`zai-coding-plan`) | ⚠️ Supported through generic API handling; `--usage` reads the GLM Coding Plan quota; testers wanted |
 | GitLab and Snowflake API/PAT | ⚠️ Supported through generic API handling; testers wanted |
 | GitLab and Snowflake OAuth | ❌ Not supported: OpenCode does not persist a provably stable per-user identity |
 | Well-known URL auth and unknown OAuth plugins | ❌ Not supported |

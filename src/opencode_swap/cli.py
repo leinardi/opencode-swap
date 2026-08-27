@@ -44,7 +44,7 @@ def _build_parser() -> argparse.ArgumentParser:
     list_p.add_argument(
         "--usage",
         action="store_true",
-        help="fetch OpenAI/ChatGPT usage where supported (network calls; off by default)",
+        help="fetch live usage where supported (OpenAI OAuth, Z.AI GLM Coding Plan; network calls; off by default)",
     )
     current_p = subparsers.add_parser("current", help="show which managed accounts are active")
     current_p.add_argument("provider", nargs="?", help="optional provider id filter")

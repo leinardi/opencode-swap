@@ -12,11 +12,18 @@ from __future__ import annotations
 
 from typing import Protocol
 
+from opencode_swap import usage
 from opencode_swap.models import AccountDesc, AuthRecord, JsonObject, Validity
 
 
 class Provider(Protocol):
     id: str
+
+    usage_record_types: frozenset[str]
+    """Record types (``"api"``, ``"oauth"``, ...) this provider can look up
+    live usage for via ``fetch_usage``. Empty (the default for every provider
+    without a known usage endpoint) tells ``Switcher.fetch_usage`` to skip all
+    lock/refresh work and report "not applicable" rather than "unavailable"."""
 
     def extract(self, auth: JsonObject) -> AuthRecord | None:
         """Pull this provider's entry out of a parsed auth.json.
@@ -69,5 +76,16 @@ class Provider(Protocol):
         RefreshError if a refresh was attempted and the grant was rejected
         or the request otherwise failed -- callers must not treat that the
         same as "no refresh available".
+        """
+        ...
+
+    def fetch_usage(self, record: AuthRecord) -> usage.UsageSnapshot | None:
+        """Live usage/quota for `record`, fetched over the network.
+
+        Only called for record types in ``usage_record_types``. Returns None
+        when this particular record can't be looked up (missing field, secret
+        store out of sync) -- distinct from ``UsageSnapshot(available=False)``
+        ("looked it up, the request failed"). Never raises: network and shape
+        failures come back as ``available=False``.
         """
         ...

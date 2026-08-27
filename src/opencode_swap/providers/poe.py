@@ -11,6 +11,7 @@ from opencode_swap.providers.common import credential_values, extract_raw, is_js
 
 class PoeProvider:
     id = "poe"
+    usage_record_types: frozenset[str] = frozenset()  # no known usage endpoint
 
     def extract(self, auth: JsonObject) -> AuthRecord | None:
         raw = extract_raw(auth, self.id)
@@ -50,3 +51,6 @@ class PoeProvider:
 
     def refresh(self, record: AuthRecord) -> AuthRecord | None:
         return None  # no verified standalone refresh flow for this provider yet
+
+    def fetch_usage(self, record: AuthRecord) -> None:
+        return None  # unreachable: usage_record_types is empty

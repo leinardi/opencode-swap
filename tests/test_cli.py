@@ -339,6 +339,61 @@ def test_list_usage_flag_never_prints_secrets(tmp_path, monkeypatch, capsys):
     assert "super-secret-refresh-token" not in capsys.readouterr().out
 
 
+class _FakeResponse:
+    def __init__(self, body: bytes):
+        self._body = body
+
+    def read(self):
+        return self._body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+_ZAI_QUOTA_BODY = json.dumps(
+    {
+        "code": 200,
+        "data": {
+            "level": "lite",
+            "limits": [
+                {"type": "CREDIT_LIMIT", "unit": 3, "number": 5, "percentage": 8, "nextResetTime": 1787862798247},
+                {"type": "CREDIT_LIMIT", "unit": 6, "number": 1, "percentage": 12, "nextResetTime": 1788357330998},
+            ],
+        },
+        "success": True,
+    }
+).encode()
+
+
+def test_list_usage_flag_renders_zai_windows_from_payload_and_hides_key(tmp_path, monkeypatch, capsys):
+    write_live_account(tmp_path, extra={"zai-coding-plan": {"type": "api", "key": "zai-planted-secret-key"}})
+    assert cli.main(["add", "zai-coding-plan", "glm"]) == 0
+    capsys.readouterr()
+
+    monkeypatch.setattr("opencode_swap.usage.urllib.request.urlopen", lambda *a, **k: _FakeResponse(_ZAI_QUOTA_BODY))
+    assert cli.main(["list", "--usage"]) == 0
+    out = capsys.readouterr().out
+    assert "5h 8%" in out and "7d 12%" in out
+    assert "GLM Coding Lite" in out
+    assert "zai-planted-secret-key" not in out
+
+
+def test_status_json_usage_reports_zai_windows(tmp_path, monkeypatch, capsys):
+    write_live_account(tmp_path, extra={"zai-coding-plan": {"type": "api", "key": "zk"}})
+    assert cli.main(["add", "zai-coding-plan", "glm"]) == 0
+    capsys.readouterr()
+
+    monkeypatch.setattr("opencode_swap.usage.urllib.request.urlopen", lambda *a, **k: _FakeResponse(_ZAI_QUOTA_BODY))
+    assert cli.main(["status", "zai-coding-plan", "--json", "--usage"]) == 0
+    usage_block = json.loads(capsys.readouterr().out)["providers"][0]["usage"]
+    assert usage_block["available"] is True
+    assert usage_block["plan_name"] == "GLM Coding Lite"
+    assert [w["window_seconds"] for w in usage_block["windows"]] == [18000, 604800]
+
+
 def test_list_never_prints_secrets(tmp_path, capsys):
     write_live_account(tmp_path, account_id="acct-1", refresh="super-secret-refresh-token")
     cli.main(["add", "openai", "work"])

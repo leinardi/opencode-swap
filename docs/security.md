@@ -29,13 +29,19 @@ false security.
 
 ### Network calls
 
-`opencode-swap` is local/offline-only except for two opt-in exceptions, both
-gated behind an explicit CLI flag or subcommand — never triggered by a plain
-`list`/`status`/`current`:
+`opencode-swap` is local/offline-only except for the opt-in exceptions below,
+all gated behind an explicit CLI flag or subcommand — never triggered by a
+plain `list`/`status`/`current`:
 
-- `usage.py` — `GET https://chatgpt.com/backend-api/wham/usage`, only from
-  `list --usage`/`status --usage`, sending a saved account's access token as
-  Bearer auth.
+- `usage.py` — live usage lookup, only from `list --usage`/`status --usage`,
+  sending the saved account's own credential as Bearer auth to that
+  provider's usage endpoint: OpenAI ChatGPT OAuth sends the OAuth access
+  token to `GET https://chatgpt.com/backend-api/wham/usage`; Z.AI
+  `zai-coding-plan` sends the account API key to
+  `GET https://api.z.ai/api/monitor/usage/quota/limit`. Error output from
+  these requests is fixed text or an HTTP status code only — the Bearer
+  value is never stringified into a message even when the underlying
+  library embeds it in an exception.
 - `oauth_refresh.py` — `POST https://auth.openai.com/oauth/token`, from
   `list --usage`/`status --usage` (only for a saved account that isn't the
   one OpenCode currently has live and whose stored token has expired) and

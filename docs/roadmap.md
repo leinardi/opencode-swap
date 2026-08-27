@@ -19,6 +19,9 @@
   secret backend.
 - An optional OpenCode TUI plugin showing active account and usage in the
   session prompt, with account switching from the command palette.
+- Live usage lookup (`list --usage` / `status --usage`) for OpenAI ChatGPT
+  OAuth and the Z.AI GLM Coding Plan (`zai-coding-plan`), with window lengths
+  derived from the provider's response rather than hardcoded.
 - A test suite spanning unit, integration, failure injection, real
   multi-thread concurrency, compatibility, and security categories; see
   [`docs/testing.md`](testing.md).

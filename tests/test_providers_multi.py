@@ -2,12 +2,19 @@ import time
 
 import pytest
 
+from opencode_swap import usage
 from opencode_swap.exceptions import SchemaError
-from opencode_swap.models import Validity
+from opencode_swap.models import AuthRecord, Validity
 from opencode_swap.providers import PROVIDERS, get_provider
 from tests.helpers import make_jwt
 
 FRACTIONAL_EXPIRY = 1_730_000_000_000.5
+
+# Providers whose `extract` accepts an oauth record. Kept explicit (not
+# derived from a caught SchemaError) so a regression where an OAuth provider
+# starts rejecting valid OAuth records fails the test below instead of
+# silently skipping it.
+OAUTH_CAPABLE_PROVIDERS = {"openai", "github-copilot", "poe", "xai"}
 
 
 def test_generic_api_provider_preserves_string_metadata():
@@ -119,6 +126,15 @@ def test_every_provider_splice_publishes_an_integer_expiry(provider_id):
     from OpenCode at runtime."""
     provider = get_provider(provider_id)
     entry = {"type": "oauth", "refresh": "token", "access": make_jwt({"chatgpt_account_id": "acct-1"}), "expires": FRACTIONAL_EXPIRY}
+
+    if provider_id not in OAUTH_CAPABLE_PROVIDERS:
+        # An API-only provider must reject the oauth record outright rather
+        # than accept and mis-handle it -- splice never sees a fractional
+        # expiry because extract fails closed first.
+        with pytest.raises(SchemaError):
+            provider.extract({provider_id: entry})
+        return
+
     record = provider.extract({provider_id: entry})
     assert record is not None
 
@@ -126,3 +142,29 @@ def test_every_provider_splice_publishes_an_integer_expiry(provider_id):
 
     assert spliced["expires"] == int(FRACTIONAL_EXPIRY)
     assert isinstance(spliced["expires"], int)
+
+
+@pytest.mark.parametrize("provider_id", sorted(PROVIDERS))
+def test_provider_without_usage_source_returns_none_and_does_no_io(provider_id, monkeypatch):
+    provider = PROVIDERS[provider_id]
+    if provider.usage_record_types:
+        pytest.skip(f"{provider_id} has a usage source")
+
+    def boom(*a, **k):
+        raise AssertionError("fetch_usage must not perform I/O for a provider with no usage source")
+
+    monkeypatch.setattr(usage.urllib.request, "urlopen", boom)
+    assert provider.fetch_usage(AuthRecord(type="api", raw={"key": "k"})) is None
+    assert provider.fetch_usage(AuthRecord(type="oauth", raw={"refresh": "r", "access": "a"})) is None
+
+
+def test_zai_provider_shape_matches_generic_api_but_declares_a_usage_source():
+    provider = PROVIDERS["zai-coding-plan"]
+    assert provider.usage_record_types == frozenset({"api"})
+    auth = {"zai-coding-plan": {"type": "api", "key": "zk"}}
+    record = provider.extract(auth)
+    assert record is not None
+    assert provider.identity(record) == "api-key\0zk"
+    assert provider.splice({}, record) == auth
+    # no key in the record -> not looked up, rather than a request with an empty bearer
+    assert provider.fetch_usage(AuthRecord(type="api", raw={})) is None

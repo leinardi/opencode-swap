@@ -19,7 +19,7 @@ from __future__ import annotations
 import math
 import time
 
-from opencode_swap import oauth_refresh
+from opencode_swap import oauth_refresh, usage
 from opencode_swap.exceptions import SchemaError
 from opencode_swap.models import AccountDesc, AuthRecord, JsonObject, Validity
 from opencode_swap.oauth_jwt import decode_claims, extract_account_id, extract_email
@@ -70,6 +70,7 @@ def _safe_display(value: object, record: JsonObject) -> str | None:
 
 class OpenAiProvider:
     id = PROVIDER_ID
+    usage_record_types = frozenset({"oauth"})
 
     def extract(self, auth: JsonObject) -> AuthRecord | None:
         raw = auth.get(PROVIDER_ID)
@@ -176,3 +177,10 @@ class OpenAiProvider:
         if account_id:
             new_raw["accountId"] = account_id
         return AuthRecord(type="oauth", raw=new_raw)
+
+    def fetch_usage(self, record: AuthRecord) -> usage.UsageSnapshot | None:
+        access = record.raw.get("access")
+        if not isinstance(access, str):
+            return None
+        account_id = record.raw.get("accountId")
+        return usage.fetch_openai_oauth_usage(access, account_id if isinstance(account_id, str) else None)
