@@ -104,6 +104,9 @@ Read these two first — most "obvious" changes wrong without context:
 
 ## Project conventions
 
+- **Direct pushes to `main` are rejected.** The repo is public with branch
+  protection: every change goes through a branch + PR, gated on the `verify`
+  CI check. See `CONTRIBUTING.md`.
 - Python 3.12+, stdlib `argparse` (no Click/Typer), dataclasses over
   ad-hoc dicts, `from __future__ import annotations` everywhere.
 - `uv` for dependency mgmt (`uv sync --dev`, `uv run pytest`, `uv run
@@ -126,3 +129,6 @@ Read these two first — most "obvious" changes wrong without context:
 - `docs/security.md` — threat model, storage backend comparison.
 - `docs/testing.md` — testing strategy in depth.
 - `docs/roadmap.md` — milestone status (what's built, what's postponed).
+- `docs/releasing.md` — how to cut a CLI (PyPI) or TUI plugin (npm) release.
+- `CONTRIBUTING.md` — human contributor workflow (PR checklist, testing rules).
+- `SECURITY.md` — vulnerability reporting process.

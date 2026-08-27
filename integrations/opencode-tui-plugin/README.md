@@ -9,17 +9,16 @@ of credentials and account-switch transactions.
 
 ## Requirements
 
-This plugin's `status --json` parsing is pinned to `schema_version: 2`,
-introduced in `opencode-swap` 0.2.0 (OpenAI's 5h rate-limit window). It
-rejects responses from an older CLI outright rather than misreading them —
-keep the CLI at 0.2.0 or newer.
+This plugin's `status --json` parsing is pinned to `schema_version: 2`
+(OpenAI's 5h rate-limit window). It rejects responses from an older CLI
+outright rather than misreading them — keep the CLI at 0.3.0 or newer.
 
 ## Install from npm
 
 Install the Python CLI first, then install TUI package globally:
 
 ```bash
-uv tool install git+https://github.com/leinardi/opencode-swap.git
+uv tool install opencode-swap
 opencode plugin @leinardi/opencode-swap --global
 ```
 

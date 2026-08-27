@@ -2,6 +2,10 @@
 
 ## What v1 does
 
+- Published on PyPI (`uv tool install opencode-swap` / `pipx install
+  opencode-swap` / `uvx opencode-swap`) and on npm
+  (`opencode plugin @leinardi/opencode-swap --global`) via OIDC trusted
+  publishing from GitHub Actions; see [`releasing.md`](releasing.md).
 - Secure per-account storage: macOS Keychain, or atomic `0600` files under a
   `0700` directory on Linux.
 - Imports the currently-active OpenCode account, with identity dedup and

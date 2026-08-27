@@ -1,6 +1,6 @@
 [project]
 name = "opencode-swap"
-version = "0.2.0"
+version = "0.3.0"
 description = "Multi-account switcher for OpenCode"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -13,14 +13,14 @@ dependencies = [
     # because sealed.py imports it independently of transfer.py.
     "pycryptodomex>=3.19.0",
 ]
-authors = [{ name = "roberto@leinardi.com" }]
-license = { text = "MIT" }
+authors = [{ name = "Roberto Leinardi", email = "roberto@leinardi.com" }]
+license = "MIT"
+license-files = ["LICENSE"]
 keywords = ["opencode", "account-switcher", "cli"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: Console",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: MacOS",
     "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
@@ -29,6 +29,12 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
     "Topic :: Utilities",
 ]
+
+[project.urls]
+Homepage = "https://github.com/leinardi/opencode-swap"
+Repository = "https://github.com/leinardi/opencode-swap"
+Issues = "https://github.com/leinardi/opencode-swap/issues"
+Documentation = "https://github.com/leinardi/opencode-swap#readme"
 
 [project.scripts]
 opencode-swap = "opencode_swap.cli:main"
@@ -40,6 +46,9 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/opencode_swap"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src", "tests", "docs", "README.md", "LICENSE", "pyproject.toml"]
 
 [dependency-groups]
 dev = ["pytest>=8.0"]

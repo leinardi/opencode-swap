@@ -15,16 +15,16 @@ Core workflow stays standalone: no background process or proxy runs while
 OpenCode is. An optional terminal UI plugin adds account status and commands
 without taking ownership of credentials or swaps.
 
-![Active account and usage in the session prompt](integrations/opencode-tui-plugin/assets/session_prompt_right.gif)
+![Active account and usage in the session prompt](https://raw.githubusercontent.com/leinardi/opencode-swap/main/integrations/opencode-tui-plugin/assets/session_prompt_right.gif)
 
-![Account switching from the TUI command palette](integrations/opencode-tui-plugin/assets/command.gif)
+![Account switching from the TUI command palette](https://raw.githubusercontent.com/leinardi/opencode-swap/main/integrations/opencode-tui-plugin/assets/command.gif)
 
 ## Status
 
-Early / self-hosted. Core behavior is covered by automated tests and has
-been exercised against a real OpenCode installation, but it isn't packaged
-or released yet, so run it from a local checkout with `uv`. See
-[`docs/roadmap.md`](docs/roadmap.md) for what's done and what's left.
+Early. Core behavior is covered by automated tests and has been exercised
+against a real OpenCode installation. See
+[`docs/roadmap.md`](https://github.com/leinardi/opencode-swap/blob/main/docs/roadmap.md)
+for what's done and what's left.
 
 ⚠️ **OpenAI is the only provider tested end to end with real accounts.** Other
 provider implementations were derived from OpenCode source and synthetic tests.
@@ -34,8 +34,8 @@ every non-OpenAI provider.
 > 🧪 **Testers wanted.** If you use any non-OpenAI provider, please open an
 > issue with the provider, auth method, OpenCode version, and sanitized failure
 > details. **Never include credentials.**
-> [`docs/provider-research-prompt.md`](docs/provider-research-prompt.md) has a
-> copy-paste OpenCode prompt that gathers safe source evidence for one provider.
+> [`docs/provider-research-prompt.md`](https://github.com/leinardi/opencode-swap/blob/main/docs/provider-research-prompt.md)
+> has a copy-paste OpenCode prompt that gathers safe source evidence for one provider.
 
 🤖 This project is built largely with agentic AI coding tools, under human
 review. Read the code before trusting it with your credentials.
@@ -45,22 +45,30 @@ review. Read the code before trusting it with your credentials.
 `opencode-swap` activates one account at a time. If you instead want requests
 spread across several accounts at runtime, that's a different problem, and
 [`opencode-balancer`](https://github.com/thelioo/opencode-balancer) is the
-project for it. [`docs/security.md`](docs/security.md) covers the storage
-trade-offs each approach makes.
+project for it.
+[`docs/security.md`](https://github.com/leinardi/opencode-swap/blob/main/docs/security.md)
+covers the storage trade-offs each approach makes.
 
 ## Install
 
-Not published yet. Run from a checkout:
+```bash
+uv tool install opencode-swap     # or: pipx install opencode-swap
+opencode-swap --help
+```
+
+`uvx opencode-swap --help` works too, without installing anything permanently.
+
+### From source
 
 ```bash
-git clone <this-repo>
+git clone https://github.com/leinardi/opencode-swap.git
 cd opencode-swap
 uv sync
 uv run opencode-swap --help
 ```
 
 `uv tool install .` from the checkout also works if you want `opencode-swap`
-and `ocs` on your `PATH`.
+and `ocs` on your `PATH` from a local checkout.
 
 ## Quickstart
 
@@ -112,16 +120,20 @@ tokens in place; it won't create a duplicate.
 scripts). `use` also warns if it detects a running `opencode` process, since
 switching while OpenCode might be mid-token-refresh is the one real race
 condition this tool can't fully close (see
-[`docs/security.md`](docs/security.md)).
+[`docs/security.md`](https://github.com/leinardi/opencode-swap/blob/main/docs/security.md)).
 
 No command ever prints an access token, refresh token, or API key. Account
 ids are shown truncated to their last four characters.
 
 ## OpenCode TUI integration
 
-[`integrations/opencode-tui-plugin`](integrations/opencode-tui-plugin) uses
-OpenCode's supported TUI-plugin API to render active account and active-only
-usage at right side of session prompt metadata:
+```bash
+opencode plugin @leinardi/opencode-swap --global
+```
+
+[`integrations/opencode-tui-plugin`](https://github.com/leinardi/opencode-swap/blob/main/integrations/opencode-tui-plugin)
+uses OpenCode's supported TUI-plugin API to render active account and
+active-only usage at right side of session prompt metadata:
 
 ```text
 Plan · GPT-5.6 Sol OpenAI · medium                         work · 17%
@@ -131,8 +143,8 @@ It only appears after session has sent a request through provider managed by
 `opencode-swap`; it stays hidden for unrelated providers. `/swap` opens a
 safe account picker, `/swap-next` rotates current provider, and `/swap-refresh`
 refreshes visible status. See the
-[plugin README](integrations/opencode-tui-plugin/README.md) for install and
-concurrency limits.
+[plugin README](https://github.com/leinardi/opencode-swap/blob/main/integrations/opencode-tui-plugin/README.md)
+for install and concurrency limits.
 
 Core CLI does not require Bun. TUI plugin development and root `make verify`
 require Bun 1.3.14; `make check` remains Python-only and offline.
@@ -152,8 +164,9 @@ opencode-swap use openai personal
 requires an interactive terminal and is never placed in command arguments or
 printed. The archive is AES-256 encrypted and created with `0600` permissions.
 Delete the transfer archive after a successful import. See
-[`docs/architecture.md`](docs/architecture.md) for how import handles naming
-conflicts and validates accounts before writing anything.
+[`docs/architecture.md`](https://github.com/leinardi/opencode-swap/blob/main/docs/architecture.md)
+for how import handles naming conflicts and validates accounts before writing
+anything.
 
 ## How it works
 
@@ -191,8 +204,8 @@ OpenCode's `auth.json` exactly.
 
 Full details, including the exact OpenCode internals this was reverse
 engineered from and the switch algorithm's failure-recovery guarantees, are
-in [`docs/opencode-auth.md`](docs/opencode-auth.md) and
-[`docs/architecture.md`](docs/architecture.md).
+in [`docs/opencode-auth.md`](https://github.com/leinardi/opencode-swap/blob/main/docs/opencode-auth.md)
+and [`docs/architecture.md`](https://github.com/leinardi/opencode-swap/blob/main/docs/architecture.md).
 
 ## Security
 
@@ -212,7 +225,9 @@ Credentials are stored via:
 No custom cryptographic protocol. Portable exports use standard WinZip AES-256
 implemented by `pyzipper`; plaintext credentials never touch a temporary file.
 No plaintext database. Full threat model in
-[`docs/security.md`](docs/security.md).
+[`docs/security.md`](https://github.com/leinardi/opencode-swap/blob/main/docs/security.md).
+See [`SECURITY.md`](https://github.com/leinardi/opencode-swap/blob/main/SECURITY.md)
+to report a vulnerability.
 
 ## Scope
 
@@ -229,14 +244,17 @@ shells out to it rather than a separate GUI.
 
 ## Documentation
 
-- [`docs/architecture.md`](docs/architecture.md): module map, data flow, the switch algorithm, transaction/rollback design.
-- [`docs/opencode-auth.md`](docs/opencode-auth.md): how OpenCode stores provider credentials and refreshes OpenAI credentials.
-- [`docs/provider-support.md`](docs/provider-support.md): provider matrix, source evidence, live-testing status, and deferred OAuth cases.
-- [`docs/provider-research-prompt.md`](docs/provider-research-prompt.md): safe copy-paste prompt for provider-research issues.
-- [`docs/security.md`](docs/security.md): threat model, storage mechanism comparison, what's explicitly out of scope.
-- [`docs/testing.md`](docs/testing.md): testing strategy and how to run the suite.
-- [`docs/roadmap.md`](docs/roadmap.md): what v1 ships and the known gaps.
-- [`AGENTS.md`](AGENTS.md): project guide for AI coding agents working in this repo.
+- [`docs/architecture.md`](https://github.com/leinardi/opencode-swap/blob/main/docs/architecture.md): module map, data flow, the switch algorithm, transaction/rollback design.
+- [`docs/opencode-auth.md`](https://github.com/leinardi/opencode-swap/blob/main/docs/opencode-auth.md): how OpenCode stores provider credentials and refreshes OpenAI credentials.
+- [`docs/provider-support.md`](https://github.com/leinardi/opencode-swap/blob/main/docs/provider-support.md): provider matrix, source evidence, live-testing status, and deferred OAuth cases.
+- [`docs/provider-research-prompt.md`](https://github.com/leinardi/opencode-swap/blob/main/docs/provider-research-prompt.md): safe copy-paste prompt for provider-research issues.
+- [`docs/security.md`](https://github.com/leinardi/opencode-swap/blob/main/docs/security.md): threat model, storage mechanism comparison, what's explicitly out of scope.
+- [`docs/testing.md`](https://github.com/leinardi/opencode-swap/blob/main/docs/testing.md): testing strategy and how to run the suite.
+- [`docs/roadmap.md`](https://github.com/leinardi/opencode-swap/blob/main/docs/roadmap.md): what v1 ships and the known gaps.
+- [`docs/releasing.md`](https://github.com/leinardi/opencode-swap/blob/main/docs/releasing.md): how to cut a CLI (PyPI) or TUI plugin (npm) release.
+- [`AGENTS.md`](https://github.com/leinardi/opencode-swap/blob/main/AGENTS.md): project guide for AI coding agents working in this repo.
+- [`CONTRIBUTING.md`](https://github.com/leinardi/opencode-swap/blob/main/CONTRIBUTING.md): how to set up, test, and submit changes.
+- [`SECURITY.md`](https://github.com/leinardi/opencode-swap/blob/main/SECURITY.md): how to report a vulnerability.
 
 ## Development
 
@@ -249,10 +267,13 @@ make doctor
 Run `make help` for all development targets. Direct `uv` commands remain
 available when Make is not installed.
 
-See [`docs/testing.md`](docs/testing.md) for what the suite covers and how
-it keeps real macOS Keychain data and your real `auth.json` out of the
-loop, and [`AGENTS.md`](AGENTS.md) for conventions to follow when changing
-code here.
+See [`docs/testing.md`](https://github.com/leinardi/opencode-swap/blob/main/docs/testing.md)
+for what the suite covers and how it keeps real macOS Keychain data and your
+real `auth.json` out of the loop,
+[`CONTRIBUTING.md`](https://github.com/leinardi/opencode-swap/blob/main/CONTRIBUTING.md)
+for the PR workflow, and
+[`AGENTS.md`](https://github.com/leinardi/opencode-swap/blob/main/AGENTS.md)
+for conventions to follow when changing code here.
 
 ## License
 
