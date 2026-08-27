@@ -288,6 +288,40 @@ def test_refresh_reports_ambiguous_state_distinctly_and_exits_nonzero(tmp_path, 
     assert "could not be confirmed" in out
 
 
+def test_usage_columns_align_across_rows_with_different_digit_counts():
+    snaps = [
+        UsageSnapshot(
+            available=True,
+            plan_name="Plan A",
+            windows=(
+                UsageWindow(used_percent=8, reset_at=None, window_seconds=5 * 3600),
+                UsageWindow(used_percent=100, reset_at=None, window_seconds=7 * 86_400),
+            ),
+        ),
+        UsageSnapshot(
+            available=True,
+            plan_name="Plan B",
+            windows=(
+                UsageWindow(used_percent=100, reset_at=None, window_seconds=5 * 3600),
+                UsageWindow(used_percent=3, reset_at=None, window_seconds=7 * 86_400),
+            ),
+        ),
+    ]
+    widths = cli._usage_column_widths(snaps)
+    lines = [cli._format_usage(snap, widths) for snap in snaps]
+
+    assert lines[0] == "  usage: 5h   8% | 7d 100%, Plan A"
+    assert lines[1] == "  usage: 5h 100% | 7d   3%, Plan B"
+    # the " | " separator and the plan-name comma land in the same column
+    assert len({line.index(" | ") for line in lines}) == 1
+    assert len({line.index(", Plan") for line in lines}) == 1
+
+
+def test_format_usage_without_widths_is_unpadded():
+    snap = UsageSnapshot(available=True, windows=(UsageWindow(used_percent=8, reset_at=None, window_seconds=5 * 3600),))
+    assert cli._format_usage(snap) == "  usage: 5h 8%"
+
+
 def test_format_usage_shows_both_windows(monkeypatch):
     monkeypatch.setattr(cli.time, "time", lambda: 1_751_310_000)
     output = cli._format_usage(
