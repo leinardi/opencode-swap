@@ -45,7 +45,7 @@
   },
   "peerDependencies": {
     "@opencode-ai/plugin": "1.18.x",
-    "@opentui/solid": "0.4.x",
+    "@opentui/solid": "0.5.x",
     "solid-js": "1.9.15"
   },
   "devDependencies": {
@@ -59,7 +59,7 @@
     "eslint-plugin-solid": "0.16.0",
     "jiti": "2.7.0",
     "solid-js": "1.9.15",
-    "typescript": "7.0.2",
+    "typescript": "5.9.3",
     "typescript-eslint": "8.68.0"
   }
 }
