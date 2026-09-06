@@ -241,9 +241,13 @@ def _format_reset(reset_at: object) -> str | None:
         # reset time is shown in the user's local clock, same as time.time()
         # below it, so the timestamp must convert to local, not stay UTC.
         reset_time = datetime.fromtimestamp(reset_at / 1000, tz=UTC).astimezone()
+        now = datetime.fromtimestamp(time.time(), tz=UTC).astimezone()
     except (OverflowError, OSError, ValueError):
         return None
-    if 0 <= reset_at - time.time() * 1000 < 86_400_000:
+    # Bare "HH:MM" only for a reset on today's local date: an "under 24h away"
+    # test would print a bare time for tomorrow morning too, which reads as
+    # today and understates the wait.
+    if reset_time.date() == now.date():
         return f"{reset_time:%H:%M}"
     return f"{reset_time:%b} {reset_time.day}, {reset_time:%H:%M}"
 
