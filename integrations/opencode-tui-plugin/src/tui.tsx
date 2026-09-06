@@ -204,12 +204,14 @@ function usageWindowDetail(window: UsageWindow): UsageDetail | undefined {
   }
   const date = new Date(resetAt);
   if (Number.isNaN(date.getTime())) return { label, percent, band };
-  // Reset under 24h *in the future* renders as bare "HH:MM", matching
-  // cli.py's _format_reset; a past or non-finite delta always gets the full
-  // date so a stale/expired reset never reads as "today".
+  // A reset on today's local date renders as bare "HH:MM", matching cli.py's
+  // _format_reset; anything on another date keeps the full date, so tomorrow
+  // morning (under 24h away, but not today) never reads as "today".
   const hhmm = `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
-  const deltaMs = resetAt - Date.now();
-  if (deltaMs >= 0 && deltaMs < 86_400_000) return { label, percent, band, reset: hhmm };
+  const now = new Date();
+  if (date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth() && date.getDate() === now.getDate()) {
+    return { label, percent, band, reset: hhmm };
+  }
   const month = date.toLocaleString(undefined, { month: "short" });
   return { label, percent, band, reset: `${month} ${date.getDate()}, ${hhmm}` };
 }

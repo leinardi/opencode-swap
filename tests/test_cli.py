@@ -30,6 +30,17 @@ def auth_path(tmp_path):
     return tmp_path / "opencode" / "auth.json"
 
 
+@pytest.fixture
+def utc_clock():
+    """Pin the process' local timezone to UTC for one test, so assertions on
+    locally-rendered reset times do not depend on the machine's timezone."""
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("TZ", "UTC")
+        time.tzset()
+        yield
+    time.tzset()
+
+
 def write_live_account(tmp_path, account_id="acct-1", refresh="r1", extra=None):
     entry = {
         "type": "oauth",
@@ -340,7 +351,9 @@ def test_format_usage_shows_both_windows(monkeypatch):
     assert ", " in output.split(" | ")[1]
 
 
-def test_format_usage_reset_under_a_day_shows_time_only(monkeypatch):
+def test_format_usage_reset_later_today_shows_time_only(monkeypatch, utc_clock):
+    # 1_751_310_000 is 2025-06-30 19:00 UTC; utc_clock pins TZ so the local
+    # date the formatter compares against is not the test machine's.
     monkeypatch.setattr(cli.time, "time", lambda: 1_751_310_000)
     output = cli._format_usage(
         UsageSnapshot(
@@ -349,8 +362,22 @@ def test_format_usage_reset_under_a_day_shows_time_only(monkeypatch):
         )
     )
 
-    # Reset under 24h away renders as bare "HH:MM", not a full date.
-    assert "," not in output
+    # Reset on today's local date renders as bare "HH:MM", not a full date.
+    assert output == "  usage: 5h 49% @20:00"
+
+
+def test_format_usage_reset_tomorrow_shows_date(monkeypatch, utc_clock):
+    monkeypatch.setattr(cli.time, "time", lambda: 1_751_310_000)
+    output = cli._format_usage(
+        UsageSnapshot(
+            available=True,
+            # 6h ahead: under 24h away, but on the next local date, so the
+            # date has to be shown or "@01:00" reads as earlier today.
+            windows=(UsageWindow(used_percent=41, reset_at=(1_751_310_000 + 6 * 3600) * 1000, window_seconds=7 * 86_400),),
+        )
+    )
+
+    assert output == "  usage: 7d 41% @Jul 1, 01:00"
 
 
 @pytest.mark.parametrize(
