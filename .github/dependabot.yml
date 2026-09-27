@@ -37,6 +37,12 @@ updates:
     schedule:
       interval: "weekly"
     labels: ["dependencies", "tui-plugin"]
+    ignore:
+      # typescript-eslint 8.x peer range is `typescript >=4.8.4 <6.1.0` and its
+      # config throws "typescript-eslint does not support TS 7.0." at load time,
+      # breaking the lint hook. Drop this once typescript-eslint widens its range.
+      - dependency-name: "typescript"
+        versions: [">=6.1.0"]
     groups:
       tui-plugin-dependencies:
         patterns:
