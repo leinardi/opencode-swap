@@ -61,7 +61,7 @@
     "eslint-plugin-solid": "0.18.0",
     "jiti": "2.7.0",
     "solid-js": "1.9.15",
-    "typescript": "7.0.2",
+    "typescript": "6.0.3",
     "typescript-eslint": "8.70.1"
   }
 }
