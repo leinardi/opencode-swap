@@ -19,8 +19,8 @@ jobs:
       # Needed for the explicit `gh workflow run` calls below - a
       # GITHUB_TOKEN-authored push/PR does not fire other workflows'
       # push/pull_request triggers (GitHub's loop-prevention), so without
-      # dispatching ci.yml/pr-lint.yml ourselves the opened PR's required
-      # `verify` check would never appear and could never be merged.
+      # dispatching ci.yaml ourselves the opened PR's required checks
+      # would never appear and it could never be merged.
       actions: write
     steps:
       - uses: actions/checkout@v7
@@ -101,5 +101,4 @@ jobs:
           BRANCH: ${{ steps.branch.outputs.branch }}
         run: |
           set -euo pipefail
-          gh workflow run ci.yml --ref "$BRANCH"
-          gh workflow run pr-lint.yml --ref "$BRANCH"
+          gh workflow run ci.yaml --ref "$BRANCH"

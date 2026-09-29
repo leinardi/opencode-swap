@@ -1,11 +1,18 @@
 version: 2
-enable-beta-ecosystems: true # Required for the pre-commit and uv ecosystems
 
+# Every ecosystem uses chore(deps), which commitizen does not count as a release. Almost none of
+# these bumps changes what users install: pyproject.toml declares the runtime dependencies as
+# lower bounds, so Dependabot only moves uv.lock, and the TUI plugin's runtime packages are peers
+# that OpenCode provides. The exception is @opentui/solid, whose transform compiles
+# dist/tui.js. When a bump should ship (a fix in a lower bound, a changed plugin build), raise
+# the bound in a fix(deps) commit or release with an explicit version.
 updates:
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
+    commit-message:
+      prefix: "chore(deps)"
     labels: ["dependencies", "ci"]
     groups:
       github-actions:
@@ -16,6 +23,8 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    commit-message:
+      prefix: "chore(deps)"
     labels: ["dependencies", "ci"]
     groups:
       pre-commit-hooks:
@@ -26,6 +35,8 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    commit-message:
+      prefix: "chore(deps)"
     labels: ["dependencies", "python"]
     groups:
       python-dependencies:
@@ -36,6 +47,8 @@ updates:
     directory: "/integrations/opencode-tui-plugin"
     schedule:
       interval: "weekly"
+    commit-message:
+      prefix: "chore(deps)"
     labels: ["dependencies", "tui-plugin"]
     ignore:
       # typescript-eslint 8.x peer range is `typescript >=4.8.4 <6.1.0` and its
