@@ -104,6 +104,19 @@ Check these whenever affected, directly or indirectly:
   belongs in `providers/`; generic whole-file I/O belongs in
   `opencode_auth.py`; orchestration and lock ownership belong in `switcher.py`;
   secret persistence belongs in `store.py`.
+- **Releases stay reconcilable and in lockstep.** `docs/releasing.md` is the
+  contract. The CLI and the TUI plugin share one version across
+  `pyproject.toml`, `__init__.py` and `package.json`. `auto-tag-release.yaml`
+  must finish on a re-run: create a tag only if missing, fail (never move) if
+  it marks another commit, create a release only if missing, and dispatch a
+  publisher only while its registry lacks the version. An explicit release
+  version must exceed the latest `v*` tag. Publishing stays on trusted
+  publishing (OIDC); a stored `PYPI_API_TOKEN`/`NPM_TOKEN` is a finding.
+- **Workflows stay pinned and least-privilege.** `contents: read` at the top,
+  extra permissions per job with the reason. Every action is pinned to a full
+  commit SHA with a `# vX.Y.Z` comment; workflow inputs reach shell through
+  `env:`, never `${{ }}` inside `run:`. The `conventional-commits` job must
+  keep running on `workflow_dispatch`: the release bump PR depends on it.
 
 ## 4. Adversarial passes
 

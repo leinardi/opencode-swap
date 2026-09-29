@@ -6,37 +6,54 @@ version for both.
 
 ## Cutting a release
 
-1. Dispatch the **Release** workflow (`.github/workflows/release.yaml`) with
-   the new version (e.g. `0.4.0`, with or without a leading `v`).
+1. Dispatch the **Release** workflow (`.github/workflows/release.yaml`) from
+   `main`. Leave `version` empty to derive it from the Conventional Commits
+   since the last `v<version>` tag, or pass one (e.g. `0.5.0`, with or
+   without a leading `v`) to force it.
+   - A derived version comes from commitizen (`cz bump --get-next`, configured
+     in `.cz.toml`); see the bump table in
+     [`CONTRIBUTING.md`](../CONTRIBUTING.md#versioning). With nothing but
+     "none" commits since the last tag, the run fails with "nothing to bump".
+   - An explicit version must be higher than the latest release.
 2. Its `bump` job checks out `main`, bumps `pyproject.toml`,
    `src/opencode_swap/__init__.py`, and
    `integrations/opencode-tui-plugin/package.json` to that version,
    regenerates `uv.lock` and `bun.lock`, pushes a `release/v<version>`
-   branch, and opens a PR. It also explicitly dispatches `ci.yml` and
-   `pr-lint.yml` against that branch — a bot-authored push/PR does not fire
-   other workflows' `push`/`pull_request` triggers on its own (GitHub's
-   loop-prevention), so without this the PR's required `verify` check would
-   never appear.
+   branch, and opens a PR. It also explicitly dispatches `ci.yaml` against
+   that branch — a bot-authored push/PR does not fire other workflows'
+   `push`/`pull_request` triggers on its own (GitHub's loop-prevention), so
+   without this the PR's required checks might never appear. A leftover
+   `release/v<version>` branch from a failed run is recreated; one with an
+   open PR stops the run.
 3. **Review the diff and merge the PR** the same way as any other PR (the
    existing admin bypass-merge, since self-approval is impossible under
    `CODEOWNERS` + required review). This is the one manual step in the whole
    flow, and deliberately so — a human looks at the diff right before
    anything publishes.
-4. That merge is an ordinary push to `main`. `.github/workflows/auto-tag-release.yml`
+4. That merge is an ordinary push to `main`. `.github/workflows/auto-tag-release.yaml`
    runs on every push to `main`, but only acts on the one that actually
    changed `pyproject.toml`'s version (every other push — a bugfix, a
-   Dependabot merge, this very PR's own merge before any version bump has
-   ever happened — no-ops instantly). When it detects a version change, it:
-   - creates tags `v<version>` and `tui-v<version>` at that commit (tag
-     creation isn't covered by the branch-protection ruleset — only
-     `refs/heads/*` is — so this needs no bypass, no PAT, just
-     `GITHUB_TOKEN` with `contents: write`)
-   - creates both GitHub releases with generated notes
+   Dependabot merge — no-ops instantly). When it detects a version change, it:
+   - creates tags `v<version>` and `tui-v<version>` at that commit (the
+     immutable-tags ruleset blocks moving or deleting a tag, not creating
+     one, so this needs no bypass, no PAT, just `GITHUB_TOKEN` with
+     `contents: write`)
+   - creates both GitHub releases with generated notes; the CLI release
+     takes GitHub's **Latest** badge when it is the highest version, the TUI
+     plugin release never does
    - explicitly dispatches `publish-pypi.yml` and `publish-tui-plugin.yml`
-     against their respective tags (same loop-prevention workaround as
-     step 2 — a `GITHUB_TOKEN`-pushed tag wouldn't fire their `push: tags:`
-     triggers on its own; dispatching `workflow_dispatch` against the tag
-     ref gives them the same `ref`/`ref_type` context a real tag push would)
+     against their respective tags, each only while its registry lacks the
+     version (same loop-prevention workaround as step 2 — a
+     `GITHUB_TOKEN`-pushed tag wouldn't fire their `push: tags:` triggers on
+     its own; dispatching `workflow_dispatch` against the tag ref gives them
+     the same `ref`/`ref_type` context a real tag push would)
+
+   Every stage checks what an earlier attempt left behind, so **re-running a
+   failed `auto-tag-release.yaml` run finishes the release**: it creates only
+   the missing tags and releases, fails if a tag already exists on another
+   commit, and dispatches only the publishers whose version is still missing.
+   Wait for a dispatched publisher to finish before re-running, or it is
+   dispatched twice.
 5. Both publish workflows run independently: `publish-pypi.yml` re-verifies
    the tag matches `pyproject.toml`, runs the test suite, builds the wheel
    and sdist, publishes to PyPI via OIDC trusted publishing (no token, PEP
@@ -44,10 +61,10 @@ version for both.
    release. `publish-tui-plugin.yml` typechecks, validates the npm payload,
    and publishes through npm OIDC with provenance.
 
-Net effect: type a version once, review one PR, click merge once — both
+Net effect: dispatch once, review one PR, click merge once — both
 tags, both GitHub releases, and both package publishes cascade
-automatically. Tags are immutable once pushed (see the repo's tag-protection
-ruleset), so get the version right before dispatching.
+automatically. Tags are immutable once pushed (see the repo's immutable-tags
+ruleset), so get the version right before merging the bump PR.
 
 `workflow_dispatch` remains available directly on `publish-pypi.yml` and
 `publish-tui-plugin.yml` too, for a manual re-run; both refuse to publish a

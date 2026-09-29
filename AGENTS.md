@@ -105,8 +105,8 @@ Read these two first — most "obvious" changes wrong without context:
 ## Project conventions
 
 - **Direct pushes to `main` are rejected.** The repo is public with branch
-  protection: every change goes through a branch + PR, gated on the `verify`
-  CI check. See `CONTRIBUTING.md`.
+  protection: every change goes through a branch + PR, gated on the required
+  CI checks. See `CONTRIBUTING.md`.
 - Python 3.12+, stdlib `argparse` (no Click/Typer), dataclasses over
   ad-hoc dicts, `from __future__ import annotations` everywhere.
 - `uv` for dependency mgmt (`uv sync --dev`, `uv run pytest`, `uv run
@@ -121,6 +121,28 @@ Read these two first — most "obvious" changes wrong without context:
 - See `docs/architecture.md` for module responsibility map before adding
   new file — most new code belongs in existing module.
 
+## Commit messages
+
+All commits MUST be Conventional Commits 1.0.0 **with a scope**:
+`<type>(<scope>)[!]: <description>`. Enforced by the `conventional-pre-commit`
+`commit-msg` hook (`--force-scope`, installed by `make pre-commit-install`)
+and by the `conventional-commits` CI job. Breaking changes use `!` before `:`
+or a `BREAKING CHANGE:` footer. Example: `fix(auth): keep the rotated refresh
+token on a self-switch`.
+
+A release with no explicit version is derived by commitizen from the commits
+since the last `v<version>` tag, so a wrong type ships a wrong version: `feat`
+is a minor; `fix`, `perf` and `refactor` a patch; `build`, `chore`, `ci`,
+`docs`, `revert`, `style` and `test` nothing. Bump table:
+`CONTRIBUTING.md#versioning`. PRs land as merge commits, so every commit
+counts, not just the PR title.
+
+## Project skills
+
+Skills live in `.agents/skills/` (symlinked as `.claude/skills`). Load
+`adversarial-review` for any review request ("review my diff", "is this ready
+to merge").
+
 ## Full documentation index
 
 - `README.md` — user-facing overview, install, commands, quickstart.
@@ -129,6 +151,6 @@ Read these two first — most "obvious" changes wrong without context:
 - `docs/security.md` — threat model, storage backend comparison.
 - `docs/testing.md` — testing strategy in depth.
 - `docs/roadmap.md` — milestone status (what's built, what's postponed).
-- `docs/releasing.md` — how to cut a CLI (PyPI) or TUI plugin (npm) release.
+- `docs/releasing.md` — how to cut a release (CLI on PyPI and TUI plugin on npm, in lockstep).
 - `CONTRIBUTING.md` — human contributor workflow (PR checklist, testing rules).
 - `SECURITY.md` — vulnerability reporting process.

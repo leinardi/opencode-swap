@@ -30,12 +30,54 @@ of checks CI runs. The [PR template](.github/PULL_REQUEST_TEMPLATE.md)
 checklist expects this.
 
 This repository requires all changes to land through a pull request against
-`main` (branch protection is enabled) with at least the `verify` CI check
-passing.
+`main` (branch protection is enabled) with the required CI checks passing.
 
-Use [Conventional Commits](https://www.conventionalcommits.org/) for commit
-subjects (`feat(cli): ...`, `fix(auth): ...`, `docs(readme): ...`) — matches
-the existing history and drives release notes.
+Install the git hooks once with `make pre-commit-install`. It installs both
+the `pre-commit` and the `commit-msg` hooks, so commit messages are checked
+when you commit, not when the release runs.
+
+## Commit messages
+
+All commits must follow
+[Conventional Commits 1.0.0](https://www.conventionalcommits.org/en/v1.0.0/)
+with a scope: `<type>(<scope>)[!]: <description>`. The
+`conventional-pre-commit` hook enforces this on `commit-msg`, and the
+`conventional-commits` CI job checks it again on every pull request. Release
+notes are not built from these messages: `gh release create --generate-notes`
+lists the merged pull requests by title.
+
+Common types: `feat`, `fix`, `docs`, `test`, `refactor`, `perf`, `build`,
+`ci`, `chore`, `style`, `revert`. Use a lower-case, imperative description:
+
+```text
+fix(auth): keep the rotated refresh token on a self-switch
+feat(cli): add an export command
+feat(store)!: move the registry to a new location
+```
+
+Mark breaking changes with `!` before the colon or a
+`BREAKING CHANGE: <description>` footer.
+
+## Versioning
+
+A release with no explicit version is derived from these types by
+commitizen, from the commits since the last `v<version>` tag:
+
+| Release | Commit |
+| --- | --- |
+| major | any type with `!` before the colon, or a `BREAKING CHANGE:` footer |
+| minor | `feat` |
+| patch | `fix`, `perf`, `refactor` |
+| none | `build`, `chore`, `ci`, `docs`, `revert`, `style`, `test` |
+
+The highest bump among the commits wins. commitizen counts `perf` and
+`refactor` as a patch, so either one is enough to make a release on its own.
+A `revert` of a shipped `feat` or `fix` bumps nothing; type it `fix` when the
+revert should ship.
+
+Pull requests are merged with merge commits, so every commit in a pull
+request lands on `main` as it is and counts toward the version: each commit
+needs a correct type, not just the pull request as a whole.
 
 ## Invariants a PR must not violate
 
