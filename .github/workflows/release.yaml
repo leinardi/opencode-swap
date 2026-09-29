@@ -4,11 +4,16 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to release (e.g. 0.4.0 or v0.4.0) - bumps the CLI and TUI plugin together"
-        required: true
+        description: "Version to release (e.g. 0.5.0 or v0.5.0), for the CLI and the TUI plugin together. Leave empty to derive it from the Conventional Commits since the last release tag."
+        required: false
 
 permissions:
   contents: read
+
+# Two releases at once would race for the same bump branch and version.
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
   bump:
@@ -16,34 +21,86 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
-      # Needed for the explicit `gh workflow run` calls below - a
+      # Needed for the explicit `gh workflow run` call below - a
       # GITHUB_TOKEN-authored push/PR does not fire other workflows'
       # push/pull_request triggers (GitHub's loop-prevention), so without
       # dispatching ci.yaml ourselves the opened PR's required checks
       # would never appear and it could never be merged.
       actions: write
     steps:
-      - uses: actions/checkout@v7
+      # The bump branch is cut from the dispatched ref; from any other branch it would release
+      # commits that are not on main. A failing step, not a job-level `if`, so a wrong dispatch
+      # shows up red instead of as a skipped, green run.
+      - name: Refuse to release from a branch other than main
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "Dispatch the release from main, not $GITHUB_REF." >&2
+          exit 1
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # commitizen's scm version provider reads the current version from the highest
+          # matching git tag, so the tags have to be fetched, not just the history.
           fetch-depth: 0
-      - uses: actions/setup-python@v7
+          fetch-tags: true
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
-      - uses: astral-sh/setup-uv@v7
-      - uses: oven-sh/setup-bun@v2
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: "1.3.14"
 
-      - name: Validate and normalize version
+      - name: Install dev dependencies
+        run: uv sync --dev --locked
+
+      - name: Resolve the version to release
         id: version
+        env:
+          RAW: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          RAW="${{ inputs.version }}"
-          VERSION="${RAW#v}"
-          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "Version must look like X.Y.Z (got '${{ inputs.version }}')" >&2
+          if [ -n "$RAW" ]; then
+            VERSION="${RAW#v}"
+            if ! [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+              echo "Version must look like X.Y.Z, without leading zeros (got '$RAW')" >&2
+              exit 1
+            fi
+          else
+            # --get-next prints only the computed version on stdout. Two exit codes are
+            # routine rather than broken, and both mean the same thing to us:
+            #   3  NO_COMMITS_FOUND    - nothing at all since the last tag
+            #   21 NoneIncrementExit   - commits exist but none are eligible (a docs-only
+            #                            or chore-only stretch)
+            # stderr is left attached so commitizen's own message lands in the log next to
+            # the one below.
+            set +e
+            VERSION=$(uv run --no-sync cz bump --get-next)
+            STATUS=$?
+            set -e
+            case "$STATUS" in
+              0) ;;
+              3 | 21)
+                echo "No feat/fix/perf/refactor or breaking-change commit since the last release tag, so there is nothing to bump. Re-run this workflow with an explicit version to force one." >&2
+                exit 1
+                ;;
+              *)
+                echo "cz bump --get-next failed with exit code $STATUS" >&2
+                exit "$STATUS"
+                ;;
+            esac
+          fi
+          # An explicit version skips commitizen's own check, so compare it here: a version at or
+          # below the latest release would tag a release older than the one users already have.
+          # The derived one is always higher. commitizen reads the current version from the
+          # highest `v<version>` tag (.cz.toml), and reports 0.0.0 when there is none.
+          CURRENT=$(uv run --no-sync cz version --project)
+          HIGHEST=$(printf '%s\n%s\n' "$CURRENT" "$VERSION" | sort -V | tail -n 1)
+          if [ "$VERSION" = "$CURRENT" ] || [ "$HIGHEST" != "$VERSION" ]; then
+            echo "$VERSION is not higher than the latest release, $CURRENT." >&2
             exit 1
           fi
+          echo "Releasing $VERSION (latest release: $CURRENT)"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Bump version in pyproject.toml, __init__.py, package.json
@@ -64,12 +121,30 @@ jobs:
       - name: Commit and push bump branch
         id: branch
         env:
+          GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           BRANCH="release/v$VERSION"
+
+          # A run that fails after this push leaves the branch behind, and every retry then
+          # dies on a non-fast-forward because the branch is cut afresh from a main that has
+          # since moved. The branch is fully derived state (main, plus the generated version
+          # lines), so recreating it is always correct. An open pull request on it is not
+          # derived state: deleting the branch would close it silently, so stop and say so
+          # instead.
+          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+            OPEN_PR=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[].number')
+            if [ -n "$OPEN_PR" ]; then
+              echo "$BRANCH already has an open pull request (#$OPEN_PR). Merge or close it before releasing $VERSION again." >&2
+              exit 1
+            fi
+            echo "Deleting $BRANCH, left behind by an earlier run."
+            git push origin --delete "$BRANCH"
+          fi
+
           git switch -c "$BRANCH"
           git add pyproject.toml src/opencode_swap/__init__.py \
             integrations/opencode-tui-plugin/package.json \
@@ -93,7 +168,7 @@ jobs:
             --base main \
             --head "$BRANCH" \
             --title "chore(release): bump version to $VERSION" \
-            --body "Automated version bump. Review the diff, then merge — merging triggers \`auto-tag-release.yml\`, which tags \`v$VERSION\` and \`tui-v$VERSION\`, creates both GitHub releases, and publishes to PyPI and npm."
+            --body "Automated version bump. Review the diff, then merge — merging triggers \`auto-tag-release.yaml\`, which tags \`v$VERSION\` and \`tui-v$VERSION\`, creates both GitHub releases, and publishes to PyPI and npm."
 
       - name: Trigger CI checks on the bump branch
         env:

@@ -1,0 +1,21 @@
+# Commitizen configuration. Its only job here is to derive the next version from the
+# Conventional Commits since the last release tag, for .github/workflows/release.yaml.
+# Commit messages are enforced separately, by conventional-pre-commit in
+# .pre-commit-config.yaml; commitizen is never used to *write* a commit or a version here:
+# release.yaml writes the version into pyproject.toml, src/opencode_swap/__init__.py and the
+# TUI plugin's package.json itself, so there are no version_files.
+#
+# major_version_zero is deliberately left at its default of false: a feat!: or a
+# BREAKING CHANGE: footer bumps the major even from a 0.x version.
+[tool.commitizen]
+name = "cz_conventional_commits"
+
+# The current version is the highest `v<version>` tag, so a bump pull request that was merged
+# but never tagged does not move it. The TUI plugin's `tui-v<version>` tags carry the same
+# version and do not match this format, so they are not read. A tag_format typo shows up as
+# commitizen reporting the version as 0.0.0.
+version_provider = "scm"
+tag_format = "v$version"
+
+# Release notes come from `gh release create --generate-notes`; this repository has no CHANGELOG.md.
+update_changelog_on_bump = false
