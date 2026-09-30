@@ -51,7 +51,10 @@ packages = ["src/opencode_swap"]
 include = ["src", "tests", "docs", "README.md", "LICENSE", "pyproject.toml"]
 
 [dependency-groups]
-dev = ["pytest>=8.0"]
+dev = [
+    "commitizen>=4.18.1",
+    "pytest>=8.0",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
