@@ -126,6 +126,8 @@ a `SchemaError` caught through a base class is a blocker. In addition:
   commit SHA with a `# vX.Y.Z` comment; workflow inputs reach shell through
   `env:`, never `${{ }}` inside `run:`. The `conventional-commits` job must
   keep running on `workflow_dispatch`: the release bump PR depends on it.
+  `ci-result` is the aggregate check: it needs every gating job, and only
+  `conventional-commits` may be skipped, on a push to `main`.
 
 ## 4. Adversarial passes
 
@@ -162,6 +164,34 @@ Do not skim for style. Run each pass with "how can this fail?" framing:
   Reject tests that pass against old code, assert mocks instead of durable state,
   weaken existing assertions, use uppercase account names while expecting
   non-normalized keys, or inject failure at a broader/wrong write call.
+- **Commit type matches whether it ships:** with no explicit version,
+  commitizen derives the release from the commit types since the last `v*`
+  tag (`CONTRIBUTING.md#versioning`): `feat` a minor; `fix`, `perf` and
+  `refactor` a patch; `!` or a `BREAKING CHANGE:` footer a major; everything
+  else nothing. Pull requests land as merge commits, so every commit counts.
+  What ships: the CLI on PyPI (`src/opencode_swap/**`, the `pyproject.toml`
+  dependencies and entry points) and the TUI plugin on npm
+  (`integrations/opencode-tui-plugin/src/**`, its `package.json` and
+  `scripts/build.ts`). A behaviour change there typed `build`, `chore`, `ci`,
+  `docs`, `style` or `test` never releases on its own: a finding. So is a
+  `feat` or `fix`, or a `perf` or `refactor` (both bump here), on a change
+  users do not receive (CI, docs, tests, tooling), which cuts a release with
+  nothing in it; a stray `!` or `BREAKING CHANGE:` footer; and a `revert` of a
+  shipped `feat`/`fix` that is not typed `fix` (a `revert` bumps nothing).
+  commitizen matches every line of every message, merge commits included,
+  against `^<word>(<scope>)?!?:` and bumps when the word starts with `feat`,
+  `fix`, `refactor` or `perf`: a body line such as `fixtures: ...`, or a pull
+  request title typed that way (GitHub writes it into the merge commit's
+  body), counts too. A comment-only change to a shipped file (a licence
+  header, a typo) may be `docs` or `chore`; it ships with the next release.
+- **A meta-test that can no longer fail:** `scripts/check-license-headers.sh`
+  (with `tests/test_license_headers.py`), `scripts/check-npm-resolution.sh`,
+  `scripts/check-tui-entry-compiled.sh` and the `ci-result` job guard claims
+  nothing else checks. Break the guarded thing once (strip a header, point
+  the TUI entry at raw `.tsx`, make a needed job fail) and see whether the
+  check still fails. A check that passes because its file list is empty, its
+  `case` pattern no longer matches anything, its loop never ran, or a gating
+  job is missing from `ci-result`'s `needs` is a false pass: a finding.
 
 For each candidate finding, reproduce it or trace the failing input end to
 end. If that confirms it, report it. If not, dig once more; if it is still
@@ -179,6 +209,8 @@ Never allow verification to access real keychains or live OpenCode data.
 | packaging, dependencies, entry points, or build configuration | `uv run pytest -q`, then `uv build` |
 | TUI plugin | `make tui-plugin-typecheck tui-plugin-lint tui-plugin-package-check tui-plugin-entry-check` |
 | docs, skills, YAML or shell | `make check` |
+| `scripts/check-license-headers.sh`, `tests/test_license_headers.py` | `uv run pytest -q tests/test_license_headers.py`, `make check`, and the mutation from the meta-test pass |
+| `.github/workflows/**` | `pre-commit run actionlint --all-files`, `make check` |
 | broad change or merge-readiness review | `make verify` |
 
 The full test suite is fast and isolated, so source changes normally warrant
