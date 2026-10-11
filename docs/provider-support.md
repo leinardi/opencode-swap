@@ -72,5 +72,6 @@ Every other provider reports `usage: n/a`.
 - OpenAI refresh/write-back: `packages/opencode/src/plugin/openai/codex.ts:355-380`
 - xAI refresh/write-back: `packages/opencode/src/plugin/xai.ts:485-517`
 - Snowflake refresh/write-back: `packages/opencode/src/plugin/snowflake-cortex.ts:298-367`
-- Copilot durable token and zero expiry: `packages/opencode/src/plugin/github-copilot/copilot.ts:280-305`
+- Copilot durable token and zero expiry:
+  `packages/opencode/src/plugin/github-copilot/copilot.ts:280-305`
 - Built-in registration: `packages/opencode/src/plugin/index.ts:12-22,64-81`

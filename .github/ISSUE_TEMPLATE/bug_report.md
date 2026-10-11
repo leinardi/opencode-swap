@@ -7,8 +7,10 @@ assignees: []
 ---
 ## Step 1: Are you in the right place?
 
-* [ ] I have checked that there are no duplicate active or recent issues (bugs, questions, or feature requests) describing this problem.
-* [ ] I am using the latest released version of `opencode-swap` (or have tested on the `main` branch).
+* [ ] I have checked that there are no duplicate active or recent issues (bugs, questions, or
+  feature requests) describing this problem.
+* [ ] I am using the latest released version of `opencode-swap` (or have tested on the `main`
+  branch).
 
 > ⚠️ **Never paste credentials.** Do not include access tokens, refresh
 > tokens, API keys, or the contents of `auth.json` in this issue. Account ids
@@ -22,7 +24,8 @@ assignees: []
 * Install method (`uv tool install`, `pipx`, `uvx`, checkout): `?`
 * Operating system and version: `?`
 * Provider and auth type (e.g. `openai` ChatGPT OAuth, `zai-coding-plan` API key): `?`
-* `opencode-swap doctor` output (sanitized, no paths containing your username if you'd rather redact them):
+* `opencode-swap doctor` output (sanitized, no paths containing your username if you'd rather redact
+  them):
 
 ```text
 <paste output here>
@@ -58,7 +61,8 @@ assignees: []
 
 ### Error / log output
 
-<!-- If you are getting an error, paste the output here. Double-check it for anything credential-shaped before posting. -->
+<!-- If you are getting an error, paste the output here. Double-check it for anything
+credential-shaped before posting. -->
 
 ```text
 <paste logs or error messages here>

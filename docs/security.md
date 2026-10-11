@@ -163,19 +163,17 @@ a strong, unique passphrase; archive security depends on its entropy.
 | Explicit portable account export | User-selected path (`0600`, AES-256 encrypted) | Yes — delete after import |
 | `opencode-swap`'s own lock file | `.lock` (empty, no data) | No |
 
-The non-secret/secret split is enforced structurally: `AccountMeta` (the
-registry dataclass) has no field that could hold a token, and the one place
-identity derivation *could* use a credential value (`Provider.identity`) is never
-persisted to the registry — only recomputed on demand from data already
-loaded from the secret store. The single deliberate carve-out is that a
-static-key account, having no real account id, shows the API key's **last 4
-characters** in that slot (`providers.common.key_account_hint`) so a listed
-row can be matched against the provider's own key dashboard; 4 trailing
-characters of a high-entropy key can neither reconstruct it nor narrow a
-brute-force, and the guard rejects keys short enough for that to matter. See `docs/architecture.md#the-provider-seam`.
-Provider implementations enumerate credential fields for archive metadata
-filtering. Unstable OAuth identities trigger preservation and refusal instead
-of guessing ownership.
+The non-secret/secret split is enforced structurally: `AccountMeta` (the registry dataclass) has no
+field that could hold a token, and the one place identity derivation *could* use a credential value
+(`Provider.identity`) is never persisted to the registry — only recomputed on demand from data
+already loaded from the secret store. The single deliberate carve-out is that a static-key account,
+having no real account id, shows the API key's **last 4 characters** in that slot
+(`providers.common.key_account_hint`) so a listed row can be matched against the provider's own key
+dashboard; 4 trailing characters of a high-entropy key can neither reconstruct it nor narrow a
+brute-force, and the guard rejects keys short enough for that to matter. See
+`docs/architecture.md#the-provider-seam`. Provider implementations enumerate credential fields for
+archive metadata filtering. Unstable OAuth identities trigger preservation and refusal instead of
+guessing ownership.
 
 ## Process hygiene
 
