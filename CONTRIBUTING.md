@@ -79,6 +79,13 @@ Pull requests are merged with merge commits, so every commit in a pull
 request lands on `main` as it is and counts toward the version: each commit
 needs a correct type, not just the pull request as a whole.
 
+commitizen reads every line of every commit message, merge commits included,
+and bumps on a line that starts with a word beginning with `feat`, `fix`,
+`refactor` or `perf`, an optional scope and a colon. A body line such as
+`fixtures: ...` therefore bumps a patch, and so does a pull request title
+typed `fix(...)`, because GitHub writes the title into the merge commit's
+body.
+
 ## Invariants a PR must not violate
 
 These are load-bearing; see [`AGENTS.md`](AGENTS.md) for the full list and
