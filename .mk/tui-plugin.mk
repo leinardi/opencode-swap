@@ -57,10 +57,10 @@ tui-plugin-entry-check: tui-plugin-build ## Verify packed TUI plugin entry is pr
 	"$(REPO_ROOT)/scripts/check-tui-entry-compiled.sh" "$(TUI_PLUGIN_DIR)"
 
 # Deliberately does not depend on tui-plugin-sync: this must resolve the packed
-# payload with npm from a clean slate, because Bun only warns on the peer
-# conflicts that make OpenCode's npm-based plugin install fail outright.
+# payload from a clean slate with OpenCode's own Arborist version, because Bun
+# only warns on the peer conflicts that make OpenCode's plugin install fail.
 .PHONY: tui-plugin-npm-resolve-check
-tui-plugin-npm-resolve-check: ## Verify npm can resolve OpenCode TUI plugin peer dependencies
+tui-plugin-npm-resolve-check: ## Verify OpenCode's npm installer can resolve the TUI plugin's peers
 	"$(REPO_ROOT)/scripts/check-npm-resolution.sh" "$(TUI_PLUGIN_DIR)"
 
 endif  # MK_LOCAL_TUI_PLUGIN_INCLUDED
