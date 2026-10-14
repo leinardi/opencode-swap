@@ -105,10 +105,10 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
-          sed -i "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" integrations/opencode-tui-plugin/package.json
+          sed -i "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" package.json
 
       - name: Regenerate the lockfile
-        run: bun install --cwd integrations/opencode-tui-plugin
+        run: bun install
 
       - name: Commit and push bump branch
         id: branch
@@ -138,8 +138,7 @@ jobs:
           fi
 
           git switch -c "$BRANCH"
-          git add integrations/opencode-tui-plugin/package.json \
-            integrations/opencode-tui-plugin/bun.lock
+          git add package.json bun.lock
           if git diff --cached --quiet; then
             echo "Nothing changed - is $VERSION already the current version?" >&2
             exit 1

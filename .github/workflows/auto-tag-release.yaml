@@ -32,7 +32,7 @@ jobs:
       - name: Detect a version bump
         id: detect
         env:
-          PACKAGE_JSON: integrations/opencode-tui-plugin/package.json
+          PACKAGE_JSON: package.json
         run: |
           set -euo pipefail
           CURRENT=$(jq -r .version "$PACKAGE_JSON")

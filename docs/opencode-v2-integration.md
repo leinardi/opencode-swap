@@ -407,6 +407,25 @@ unsigned JWTs with made-up emails, and two z.ai keys (`team`, `solo`).
   V13. With `@leinardi/opencode-swap@0.4` it resolved 0.4.6 and offered `/swap`, `/swap-next`
   and `/swap-refresh`.
 
+## The plugin at the repository root
+
+The plugin moved from `integrations/opencode-tui-plugin/` to the repository root. Its make
+targets are now `plugin-*`; the `tui-plugin-*` names stay as aliases without help text, so
+`make help` lists each target once. The published payload is unchanged apart from `README.md`
+and `LICENSE`, which are now the repository's own.
+
+`auto-tag-release.yaml` was replayed on a scratch clone: its "Detect a version bump" script,
+extracted from the workflow, ran with `PACKAGE_JSON: package.json` against the move commit and
+then against a follow-up commit bumping the version.
+
+| Commit | Output |
+| --- | --- |
+| the move (`package.json` 0.4.6, absent from the parent) | `The parent commit has no package.json - not a release commit.`, `bumped=false` |
+| a follow-up bump to 1.0.0 | `Version changed: 0.4.6 -> 1.0.0.`, `bumped=true`, `version=1.0.0` |
+
+On `main` the move lands in a merge commit whose first parent still has the plugin under
+`integrations/`, so the same check applies there: the move tags and publishes nothing.
+
 ## Deviations and open items
 
 Deviations from the plan, each with its evidence above:

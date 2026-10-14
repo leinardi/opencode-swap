@@ -69,12 +69,12 @@ repos:
         pass_filenames: false
         always_run: true
         stages: [pre-commit]
-      - id: tui-plugin-eslint
-        name: tui-plugin eslint
-        entry: make tui-plugin-lint
+      - id: plugin-eslint
+        name: plugin eslint
+        entry: make plugin-lint
         language: system
         pass_filenames: false
-        files: ^integrations/opencode-tui-plugin/((src|test)/.*\.tsx?|eslint\.config\.ts|package\.json|bun\.lock)$
+        files: ^((src|test)/.*\.tsx?|eslint\.config\.ts|package\.json|bun\.lock)$
   - repo: https://github.com/adrienverge/yamllint
     rev: v1.38.0
     hooks:

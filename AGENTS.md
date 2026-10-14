@@ -32,7 +32,7 @@ Read these two first — most "obvious" changes wrong without context:
 
 ## Core invariants — do not violate
 
-These govern the OpenCode 2 TUI plugin (`integrations/opencode-tui-plugin`). The Python CLI is
+These govern the OpenCode 2 TUI plugin, which is the repository root. The Python CLI is
 frozen at 0.4.x and leaves the repo; until then its own rules stay in `docs/architecture.md` and
 `docs/security.md`. OpenCode 2 behavior cited here is in `docs/opencode-v2-integration.md`.
 
@@ -164,9 +164,9 @@ Run before considering an edit done. `make check` applies to every row.
 
 | You edited | Run |
 | --- | --- |
-| `integrations/opencode-tui-plugin/**` | `make tui-plugin-typecheck tui-plugin-lint tui-plugin-test tui-plugin-package-check tui-plugin-entry-check tui-plugin-npm-resolve-check` |
-| `scripts/check-npm-resolution.sh`, `scripts/check-tui-entry-compiled.sh` | `make tui-plugin-npm-resolve-check tui-plugin-entry-check`; break what each guards once and see it fail |
-| `scripts/check-license-headers.sh`, `integrations/opencode-tui-plugin/test/license-headers.test.ts` | `make tui-plugin-test`; strip a header once and see the check fail |
+| `src/**`, `test/**`, `scripts/build.ts`, `package.json`, `bun.lock`, `tsconfig.json`, `eslint.config.ts` | `make plugin-typecheck plugin-lint plugin-test plugin-package-check plugin-entry-check plugin-npm-resolve-check` |
+| `scripts/check-npm-resolution.sh`, `scripts/check-tui-entry-compiled.sh` | `make plugin-npm-resolve-check plugin-entry-check`; break what each guards once and see it fail |
+| `scripts/check-license-headers.sh`, `test/license-headers.test.ts` | `make plugin-test`; strip a header once and see the check fail |
 | `.github/workflows/**` | `pre-commit run actionlint --all-files`; release workflows: `docs/releasing.md` |
 | `.pre-commit-config.yaml`, `Makefile`, repo-local `.mk/*.mk` | `make check`, `make help` |
 | `*.md`, `.agents/skills/**` | `make check`: markdownlint holds prose to 100 columns; tables, code blocks and headings are exempt |
@@ -177,8 +177,7 @@ CI's aggregate check is `ci-result`: it needs `verify`, `pre-commit-all` and
 
 ## Generated or vendored: never hand-edit
 
-- `integrations/opencode-tui-plugin/bun.lock`: regenerate with `bun install`
-  in the plugin directory after editing its `package.json`.
+- `bun.lock`: regenerate with `bun install` after editing `package.json`.
 - `.mk/help.mk`, `.mk/password.mk`, `.mk/pre-commit.mk`,
   `.mk/.mk-common-version` and `scripts/bootstrap-mk-common.sh`: fetched from
   `leinardi/make-common` (the Makefile's `MK_COMMON_FILES`); refresh with

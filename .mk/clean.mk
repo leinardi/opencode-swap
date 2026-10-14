@@ -24,7 +24,7 @@ ifndef MK_LOCAL_CLEAN_INCLUDED
 MK_LOCAL_CLEAN_INCLUDED := 1
 
 .PHONY: clean
-clean: ## Remove the TUI plugin's build output
-	rm -rf "$(TUI_PLUGIN_DIR)/dist"
+clean: ## Remove the plugin's build output
+	rm -rf "$(PLUGIN_DIR)/dist"
 
 endif  # MK_LOCAL_CLEAN_INCLUDED

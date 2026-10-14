@@ -31,7 +31,7 @@ updates:
           - "*"
 
   - package-ecosystem: "bun"
-    directory: "/integrations/opencode-tui-plugin"
+    directory: "/"
     schedule:
       interval: "monthly"
     commit-message:

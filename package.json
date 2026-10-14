@@ -7,8 +7,7 @@
   "author": "Roberto Leinardi",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/leinardi/opencode-swap.git",
-    "directory": "integrations/opencode-tui-plugin"
+    "url": "git+https://github.com/leinardi/opencode-swap.git"
   },
   "bugs": {
     "url": "https://github.com/leinardi/opencode-swap/issues"
