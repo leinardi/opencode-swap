@@ -20,6 +20,12 @@ ij_wrap_on_typing = false
 [*.{yml,yaml}]
 indent_size = 2
 
+[*.{ts,tsx,js,mjs,json}]
+indent_size = 2
+
+[*.sh]
+indent_size = 2
+
 [*.md]
 max_line_length = 100
 trim_trailing_whitespace = false # Allow trailing spaces for line breaks

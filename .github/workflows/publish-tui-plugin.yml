@@ -2,7 +2,7 @@ name: Publish TUI Plugin
 
 on:
   push:
-    tags: ["tui-v*"]
+    tags: ["v*"]
   workflow_dispatch:
 
 permissions:
@@ -36,8 +36,8 @@ jobs:
         run: |
           VERSION=$(node -p "require('./package.json').version")
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          if [ "$GITHUB_REF_TYPE" = "tag" ] && [ "$GITHUB_REF_NAME" != "tui-v$VERSION" ]; then
-            echo "Tag must be tui-v$VERSION, got $GITHUB_REF_NAME" >&2
+          if [ "$GITHUB_REF_TYPE" = "tag" ] && [ "$GITHUB_REF_NAME" != "v$VERSION" ]; then
+            echo "Tag must be v$VERSION, got $GITHUB_REF_NAME" >&2
             exit 1
           fi
       - name: Install locked dependencies
@@ -46,6 +46,8 @@ jobs:
       # not build; compile the entry explicitly before verifying or publishing.
       - name: Build plugin entry
         run: bun run --cwd integrations/opencode-tui-plugin build
+      - name: Run unit tests
+        run: bun run --cwd integrations/opencode-tui-plugin test
       - name: Verify package
         run: bun run --cwd integrations/opencode-tui-plugin check
       - name: Verify npm peer resolution

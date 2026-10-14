@@ -23,10 +23,7 @@
 ifndef MK_LOCAL_VERIFY_INCLUDED
 MK_LOCAL_VERIFY_INCLUDED := 1
 
-.PHONY: verify-python
-verify-python: python-test python-build ## Verify tests and package build
-
 .PHONY: verify
-verify: check verify-python tui-plugin-typecheck tui-plugin-lint tui-plugin-test tui-plugin-package-check tui-plugin-npm-resolve-check tui-plugin-entry-check ## Verify pre-commit checks and packages
+verify: check tui-plugin-typecheck tui-plugin-lint tui-plugin-test tui-plugin-package-check tui-plugin-npm-resolve-check tui-plugin-entry-check ## Verify pre-commit checks and packages
 
 endif  # MK_LOCAL_VERIFY_INCLUDED

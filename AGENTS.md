@@ -142,7 +142,7 @@ last tag, a release with no version fails with "nothing to bump". Bump table
 and details: `CONTRIBUTING.md#versioning`.
 
 **Pick the type by whether the change should ship, not by what kind of change
-it is.** What ships is the CLI on PyPI and the TUI plugin on npm. A change
+it is.** What ships is the TUI plugin on npm. A change
 users should receive is `fix` (or `feat`). `perf` and `refactor` bump a patch
 under commitizen, so never use them for a change that ships nothing (CI,
 docs, tests, tooling): type that `ci`, `docs`, `test`, `build` or `chore`. A
@@ -164,11 +164,9 @@ Run before considering an edit done. `make check` applies to every row.
 
 | You edited | Run |
 | --- | --- |
-| `src/**/*.py`, `tests/**` | `uv run pytest -q` |
-| `pyproject.toml`, `uv.lock` | `uv run pytest -q`, then `make python-build` |
 | `integrations/opencode-tui-plugin/**` | `make tui-plugin-typecheck tui-plugin-lint tui-plugin-test tui-plugin-package-check tui-plugin-entry-check tui-plugin-npm-resolve-check` |
 | `scripts/check-npm-resolution.sh`, `scripts/check-tui-entry-compiled.sh` | `make tui-plugin-npm-resolve-check tui-plugin-entry-check`; break what each guards once and see it fail |
-| `scripts/check-license-headers.sh`, `tests/test_license_headers.py` | `uv run pytest -q tests/test_license_headers.py`; strip a header once and see the check fail |
+| `scripts/check-license-headers.sh`, `integrations/opencode-tui-plugin/test/license-headers.test.ts` | `make tui-plugin-test`; strip a header once and see the check fail |
 | `.github/workflows/**` | `pre-commit run actionlint --all-files`; release workflows: `docs/releasing.md` |
 | `.pre-commit-config.yaml`, `Makefile`, repo-local `.mk/*.mk` | `make check`, `make help` |
 | `*.md`, `.agents/skills/**` | `make check`: markdownlint holds prose to 100 columns; tables, code blocks and headings are exempt |
@@ -179,7 +177,6 @@ CI's aggregate check is `ci-result`: it needs `verify`, `pre-commit-all` and
 
 ## Generated or vendored: never hand-edit
 
-- `uv.lock`: regenerate with `uv lock` after editing `pyproject.toml`.
 - `integrations/opencode-tui-plugin/bun.lock`: regenerate with `bun install`
   in the plugin directory after editing its `package.json`.
 - `.mk/help.mk`, `.mk/password.mk`, `.mk/pre-commit.mk`,
@@ -189,12 +186,12 @@ CI's aggregate check is `ci-result`: it needs `verify`, `pre-commit-all` and
 
 ## License headers
 
-Every tracked Python, shell, TypeScript and JavaScript source, the `Makefile`
+Every tracked shell, TypeScript and JavaScript source, the `Makefile`
 and the repo-local `.mk` fragments carry the MIT header, with the year of the
 file's first commit; a shebang stays on the first line. Copy it from an
 existing file of the same kind, or use the IntelliJ copyright profile in
 `.idea/copyright/`. `scripts/check-license-headers.sh` (an always-run
-pre-commit hook, tested by `tests/test_license_headers.py`) fails on any that
+pre-commit hook, tested by the TUI plugin's `test/license-headers.test.ts`) fails on any that
 lacks it. The make-common files above are exempt: they carry make-common's
 own header. YAML, JSON, TOML and Markdown are not governed.
 

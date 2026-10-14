@@ -11,67 +11,6 @@ repos:
       - id: check-json
       - id: check-toml
       - id: check-added-large-files
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v2.4.0
-    hooks:
-      - id: mypy
-        pass_filenames: false
-        args: [src/opencode_swap]
-        additional_dependencies:
-          # add stubs the project needs
-          - InquirerPy
-          - cryptography
-          - pycryptodomex
-          - pyzipper
-          - rich
-          - rich-argparse
-          - types-requests
-          - types-setuptools
-      - id: mypy
-        alias: mypy-json-output
-        name: mypy (json output)
-        # pass_filenames must stay false and the target must stay
-        # src/opencode_swap, matching the `mypy` hook above: this hook has no
-        # `files:` filter, so without pinning the target pre-commit hands it
-        # whatever files changed instead, which pulls tests/ (never meant to
-        # pass strict mypy) into the check via --from-ref/--to-ref in CI. Do
-        # not add --ignore-missing-imports either: it silently drops the
-        # import-untyped errors the `# type: ignore[import-untyped]` markers
-        # (e.g. transfer.py's pyzipper import) exist to suppress, which then
-        # makes mypy flag those markers themselves as unused-ignore.
-        pass_filenames: false
-        args:
-          [
-            "src/opencode_swap",
-            "--output",
-            "json",
-            "--hide-error-context",
-            "--show-column-numbers",
-            "--show-absolute-path",
-            "--no-pretty",
-            "--scripts-are-modules",
-          ]
-        additional_dependencies:
-          # add stubs the project needs
-          - InquirerPy
-          - cryptography
-          - pycryptodomex
-          - pyzipper
-          - rich
-          - rich-argparse
-          - types-requests
-          - types-setuptools
-        stages: [manual]
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.17.0
-    hooks:
-      - id: ruff-check
-        args: ["--fix"]
-      - id: ruff-format
-      - id: ruff-check
-        alias: ruff-check-rdjson
-        args: ["--fix", "-q", "--output-format=rdjson"]
-        stages: [manual]
   - repo: https://github.com/checkmake/checkmake.git
     rev: v0.3.2
     hooks:
@@ -113,12 +52,6 @@ repos:
         stages: [manual]
   - repo: local
     hooks:
-      - id: pytest
-        name: pytest
-        entry: uv run pytest -q
-        language: system
-        pass_filenames: false
-        files: ^(src|tests)/.*\.py$
       - id: prettier-yaml
         name: prettier-yaml
         entry: prettier
@@ -126,7 +59,7 @@ repos:
         additional_dependencies: ["prettier@3.9.9"]
         files: \.(yml|yaml)$
         args: ["--write"]
-      # Every tracked Python, shell, TypeScript and make source carries the MIT header. The check
+      # Every tracked shell, TypeScript, JavaScript and make source carries the MIT header. The check
       # reads the whole tree, so it always runs; pinned to one stage because always_run makes a
       # hook eligible at every installed stage, and commit-msg is one of them.
       - id: check-license-headers

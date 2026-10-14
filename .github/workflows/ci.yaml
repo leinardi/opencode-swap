@@ -26,10 +26,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Python only runs pre-commit itself; the repository has no Python code.
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
-      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: "1.3.14"
@@ -47,7 +47,7 @@ jobs:
           path: ~/.cache/pre-commit
           key: pre-commit|${{ runner.os }}|${{ hashFiles('.pre-commit-config.yaml') }}
       # `make check` (part of `make verify`) shells out to the bare
-      # `pre-commit` binary, not `uv run pre-commit` - install it directly.
+      # `pre-commit` binary - install it directly.
       - run: pip install pre-commit
       - run: make verify
 
@@ -55,8 +55,8 @@ jobs:
   # .pre-commit-config.yaml, and nothing left modified or created behind it. The reviewdog jobs
   # below only annotate a pull request's diff. verify's `make verify` also runs `make check`; this
   # job adds the pinned pre-commit and the modified-or-created-file check, and no hook is skipped:
-  # the hooks need the same toolchains verify sets up (uv for pytest, Bun for the TUI plugin's
-  # ESLint, Node for prettier and markdownlint).
+  # the hooks need the same toolchains verify sets up (Bun for the TUI plugin's ESLint, Node for
+  # prettier and markdownlint).
   pre-commit-all:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -69,9 +69,6 @@ jobs:
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
@@ -97,7 +94,7 @@ jobs:
         run: pre-commit run --all-files --show-diff-on-failure
 
       # pre-commit fails a hook that modifies a tracked file, which covers the auto-fixing hooks
-      # (ruff, markdownlint fix, prettier); this also fails on a file a hook creates, which its diff
+      # (markdownlint fix, prettier, end-of-file and whitespace fixers); this also fails on a file a hook creates, which its diff
       # check does not see, so no fix can pass silently.
       - name: Fail if a hook modified a file
         run: |
@@ -174,56 +171,6 @@ jobs:
 
       - name: Run markdownlint-cli2 via pre-commit + reviewdog
         uses: leinardi/gha-pre-commit-reviewdog-actions/markdownlint-cli2@007919a45a04b0c52dfbb46732019dc4831fc03c # v1.0.3
-        with:
-          from-ref: ${{ github.event.pull_request.base.sha }}
-          to-ref: ${{ github.event.pull_request.head.sha }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-
-  mypy:
-    # Reports inline PR review comments over a diff range; a manual dispatch has
-    # neither a pull request to comment on nor a base ref to diff against.
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    # reviewdog posts its findings as a pull request review (-reporter=github-pr-review in every
-    # action this workflow uses, at the pinned commit), which needs pull-requests: write. It
-    # creates no check runs, so checks: write is not needed.
-    permissions:
-      contents: read
-      pull-requests: write
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-
-      - name: Run mypy via pre-commit + reviewdog
-        uses: leinardi/gha-pre-commit-reviewdog-actions/mypy@007919a45a04b0c52dfbb46732019dc4831fc03c # v1.0.3
-        with:
-          from-ref: ${{ github.event.pull_request.base.sha }}
-          to-ref: ${{ github.event.pull_request.head.sha }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-
-  ruff:
-    # Reports inline PR review comments over a diff range; a manual dispatch has
-    # neither a pull request to comment on nor a base ref to diff against.
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    # reviewdog posts its findings as a pull request review (-reporter=github-pr-review in every
-    # action this workflow uses, at the pinned commit), which needs pull-requests: write. It
-    # creates no check runs, so checks: write is not needed.
-    permissions:
-      contents: read
-      pull-requests: write
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-
-      - name: Run ruff via pre-commit + reviewdog
-        uses: leinardi/gha-pre-commit-reviewdog-actions/ruff@007919a45a04b0c52dfbb46732019dc4831fc03c # v1.0.3
         with:
           from-ref: ${{ github.event.pull_request.base.sha }}
           to-ref: ${{ github.event.pull_request.head.sha }}

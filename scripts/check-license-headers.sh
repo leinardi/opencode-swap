@@ -27,9 +27,9 @@
 # opencode-swap is MIT-licensed, and every source file says so in its own header. This fails on
 # any tracked source file whose first lines do not carry the MIT notice with Roberto Leinardi's
 # copyright, so a header copied from another project is caught as surely as a missing one. The
-# comment marker is not checked: Python, shell and make files use `#`, TypeScript a `/* */` block.
+# comment marker is not checked: shell and make files use `#`, TypeScript a `/* */` block.
 #
-# Governed: Python, shell, TypeScript and JavaScript sources, the Makefile and the repo-local .mk
+# Governed: shell, TypeScript and JavaScript sources, the Makefile and the repo-local .mk
 # fragments. Exempt: the make-common files the bootstrap fetches (upstream, named in the
 # Makefile's MK_COMMON_FILES, plus the bootstrap script itself), which carry make-common's own
 # header. YAML, JSON, TOML and Markdown are never governed.
@@ -79,7 +79,7 @@ is_governed() {
   local path="$1"
 
   case "${path}" in
-  *.py | *.sh | *.ts | *.tsx | *.mts | *.cts | *.js | *.mjs | *.cjs | .mk/*.mk | Makefile)
+  *.sh | *.ts | *.tsx | *.mts | *.cts | *.js | *.mjs | *.cjs | .mk/*.mk | Makefile)
     return 0
     ;;
   esac

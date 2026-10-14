@@ -9,27 +9,22 @@ assignees: []
 
 * [ ] I have checked that there are no duplicate active or recent issues (bugs, questions, or
   feature requests) describing this problem.
-* [ ] I am using the latest released version of `opencode-swap` (or have tested on the `main`
-  branch).
+* [ ] I am using the latest released version of `@leinardi/opencode-swap` (or have tested on the
+  `main` branch).
 
 > ⚠️ **Never paste credentials.** Do not include access tokens, refresh
-> tokens, API keys, or the contents of `auth.json` in this issue. Account ids
-> should only ever appear truncated to their last four characters, the same
-> way `opencode-swap` itself prints them.
+> tokens, API keys, or `opencode auth export` output in this issue. A key
+> should only ever appear as its last four characters, the same way
+> `opencode-swap` itself shows it.
 
 ## Step 2: Describe your environment
 
-* `opencode-swap --version`: `?`
-* OpenCode version: `?`
-* Install method (`uv tool install`, `pipx`, `uvx`, checkout): `?`
+* `@leinardi/opencode-swap` version: `?`
+* OpenCode version (`opencode --version`): `?`
+* Install method (`opencode plugin add`, `cli.json` `"plugins"`, local checkout): `?`
+* Plugin options from `cli.json`, if any: `?`
 * Operating system and version: `?`
 * Provider and auth type (e.g. `openai` ChatGPT OAuth, `zai-coding-plan` API key): `?`
-* `opencode-swap doctor` output (sanitized, no paths containing your username if you'd rather redact
-  them):
-
-```text
-<paste output here>
-```
 
 ## Step 3: Describe the problem
 

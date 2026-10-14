@@ -87,7 +87,7 @@ Sandbox, with `auth.json` from fake records and `opencode auth export --standalo
 | DB state | Result |
 | --- | --- |
 | fresh (no DB) | `[]`; the migration is recorded as completed and `auth.json` is left as is |
-| copied OpenCode 1.19.0 DB (has `session`) | 6 credentials imported, `xai` dropped; captured as `tests/fixtures/opencode2_legacy_import.json` |
+| copied OpenCode 1.19.0 DB (has `session`) | 6 credentials imported, `xai` dropped; captured as `tests/fixtures/opencode2_legacy_import.json` (0.4.x line) |
 | migration already completed, `auth.json` replaced, one imported row deleted | unchanged: no re-import, and the deleted row stays deleted |
 
 ## V3: `opencode auth export` and `import`
@@ -442,7 +442,7 @@ Deviations from the plan, each with its evidence above:
 - **`sessionStatus` carries the session's integration as well as its run state.** `/swap-next`
   and the footer poll need the current integration (the F4 chain plus the provider list), and
   the confirm text notes a request in progress.
-- **The TypeScript usage lookups differ from `usage.py` in three ways.**
+- **The TypeScript usage lookups differ from the 0.4.x CLI's `usage.py` in three ways.**
   - Every failure message is fixed text. `usage.py` printed a network error's own message, which
     the plugin never does.
   - Redirects are not followed, so a credential only ever goes to the two usage endpoints; a
