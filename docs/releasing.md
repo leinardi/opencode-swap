@@ -1,6 +1,6 @@
 # Releasing
 
-opencode-swap is discontinued. Its last releases are 0.4.7 (the Python CLI on PyPI and the
+opencode-swap is discontinued. Its last releases are 0.5.0 (the Python CLI on PyPI and the
 OpenCode 1 TUI plugin on npm) and 1.0.0 (an npm-only notice for OpenCode 2). This page records
 how a release worked, for those two, and the [sunset](#sunset) that follows them.
 
@@ -60,28 +60,28 @@ refuses to publish a version npm already has.
 | Dist-tag | Holds | Installed by |
 | --- | --- | --- |
 | `latest` | the 1.x discontinuation notice (OpenCode 2) | `opencode plugin add @leinardi/opencode-swap`, and any bare package name |
-| `legacy` | the newest 0.4.x release (OpenCode 1) | `@leinardi/opencode-swap@legacy` |
+| `legacy` | 0.5.0, the last OpenCode 1 release | `@leinardi/opencode-swap@legacy` |
 
 npm moves `latest` to whatever is published without `--tag`. The publisher therefore compares
-the version with the current `latest` and publishes anything lower under `legacy`, so a 0.4.x
-fix never takes `latest` back from 1.x. OpenCode 1 users pin `@leinardi/opencode-swap@0.4`, a
-semver range that resolves to the newest 0.4.x whatever the dist-tags say.
+the version with the current `latest` and publishes anything lower under `legacy`, so an
+OpenCode 1 release never takes `latest` back from 1.x. OpenCode 1 users pin
+`@leinardi/opencode-swap@0.5`, a semver range that resolves to 0.5.x whatever the dist-tags say.
 
-0.4.7, released before 1.0.0, was published as `latest` and is moved by 1.0.0. Once 1.0.0 is
+0.5.0, released before 1.0.0, was published as `latest` and is moved by 1.0.0. Once 1.0.0 is
 out, point `legacy` at it by hand, once:
 
 ```bash
-npm dist-tag add @leinardi/opencode-swap@0.4.7 legacy
+npm dist-tag add @leinardi/opencode-swap@0.5.0 legacy
 ```
 
 ## Sunset
 
-In order, once 0.4.7 and then 1.0.0 are published:
+In order, once 0.5.0 and then 1.0.0 are published:
 
 1. Point `legacy` at the last OpenCode 1 release:
 
    ```bash
-   npm dist-tag add @leinardi/opencode-swap@0.4.7 legacy
+   npm dist-tag add @leinardi/opencode-swap@0.5.0 legacy
    ```
 
 2. Mark every version deprecated on npm. `npm install` then prints the message; OpenCode installs

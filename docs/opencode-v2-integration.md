@@ -9,7 +9,7 @@ Ground truth for the OpenCode 2 work: the `migrate-to-opencode2` command of the 
 release and the OpenCode 2 TUI plugin. Every finding below was read from OpenCode's source or
 observed in the isolated sandbox (`scripts/oc2-sandbox.sh`), with fake credentials only. When
 OpenCode behaviour is in question, check and update this file rather than re-guessing. (The
-0.4.x CLI's equivalent for OpenCode 1.x, `docs/opencode-auth.md`, stays on `maint/0.4`.)
+CLI's equivalent for OpenCode 1.x, `docs/opencode-auth.md`, is in the `v0.5.0` tag.)
 
 Sources:
 
@@ -336,7 +336,7 @@ characters from `0-9A-Za-z` (`packages/schema/src/identifier.ts:3-31`).
   published with `">=1.0.0"` was imported (its module side effect ran).
 - **A bare package name means `@latest` in OpenCode 1** (`v1:packages/opencode/src/plugin/shared.ts:210`),
   so after a 1.0.0 release, OpenCode 1 users who list `@leinardi/opencode-swap` would get the
-  OpenCode 2 build and have it rejected. They need the `@0.4` pin.
+  OpenCode 2 build and have it rejected. They need a pin such as `@0.5`.
 - **`@leinardi/opencode-swap@0.4` loads under 1.19.** In `tui.json` it resolved 0.4.6 and
   registered `/swap`, `/swap-next` and `/swap-refresh`.
 
@@ -562,10 +562,9 @@ Open items for the human checklist:
   with the plugin enabled in `tui.json` gets it in `cli.json`, next to whatever
   `@leinardi/opencode-swap` spec they had; with `@0.4` (as the 0.4.x README says), the first
   load fails and the unrelated npm package is installed. The README's migration steps now say to
-  fix `cli.json` before the first start. Worth more: `migrate-to-opencode2` in 0.4.7 printing
-  the same warning, and an OpenCode issue to migrate `plugin_enabled` ids as enable-only.
+  fix `cli.json` before the first start. Since then `migrate-to-opencode2` (released as 0.5.0)
+  prints the same warning, and the 1.x notice keeps the id. Still worth it: an OpenCode issue to
+  migrate `plugin_enabled` ids as enable-only.
 - **New screenshots** of the OpenCode 2 footer and `/swap` picker, with real usage, to replace
   `assets/` and go back into the README.
-- **The `maint/0.4` release flow** in `docs/releasing.md` (a hand-pushed `tui-v0.4.N` tag, the
-  `legacy` dist-tag, a release without the Latest badge) has not run yet. Check it with the
-  first 0.4.x fix, and point `legacy` at 0.4.7 once 1.0.0 is out.
+- **The `legacy` dist-tag:** point it at 0.5.0 once 1.0.0 is out (`docs/releasing.md#sunset`).

@@ -8,7 +8,7 @@ dist/
 .env
 .envrc
 
-# Left behind by checkouts of the 0.4.x Python CLI (maint/0.4): ignored so that switching
+# Left behind by checkouts of the Python CLI (v0.5.0 and older): ignored so that switching
 # branches does not show them as untracked.
 __pycache__/
 .venv/

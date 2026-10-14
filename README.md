@@ -30,7 +30,7 @@ What replaces each part of opencode-swap:
 
 ## Moving your saved accounts to OpenCode 2
 
-The last CLI release, 0.4.7, moves the accounts saved with 0.4.x into OpenCode 2. Quit OpenCode 1
+The last CLI release, 0.5.0, moves the accounts saved with 0.4.x into OpenCode 2. Quit OpenCode 1
 and remove the plugin from `tui.json` first (see above), then:
 
 ```bash
@@ -38,27 +38,27 @@ opencode-swap migrate-to-opencode2 | opencode auth import
 ```
 
 Details and options are in the
-[0.4.7 README](https://github.com/leinardi/opencode-swap/blob/v0.4.7/README.md#moving-to-opencode-2).
+[0.5.0 README](https://github.com/leinardi/opencode-swap/blob/v0.5.0/README.md#moving-to-opencode-2).
 Once everything works in OpenCode 2, remove the saved accounts with
 `opencode-swap remove <provider> <name>`, then uninstall the CLI (`uv tool uninstall opencode-swap`
 or `pipx uninstall opencode-swap`).
 
 ## If you still use OpenCode 1
 
-0.4.7 still works with OpenCode 1.x and gets no further changes. Keep the TUI plugin pinned in
+0.5.0 still works with OpenCode 1.x and gets no further changes. Keep the TUI plugin pinned in
 `tui.json`, since a bare package name now resolves to the 1.x notice, which OpenCode 1 refuses to
 load:
 
 ```json
 {
-  "plugin": ["@leinardi/opencode-swap@0.4"]
+  "plugin": ["@leinardi/opencode-swap@0.5"]
 }
 ```
 
 ## The code
 
-- The 0.4.x CLI and OpenCode 1 TUI plugin: tag
-  [`v0.4.7`](https://github.com/leinardi/opencode-swap/tree/v0.4.7).
+- The CLI and the OpenCode 1 TUI plugin: tag
+  [`v0.5.0`](https://github.com/leinardi/opencode-swap/tree/v0.5.0).
 - A finished OpenCode 2 plugin (a footer with the active account and pace-coloured usage, and a
   cross-provider account picker) that was never released: tag
   [`opencode2-plugin-final`](https://github.com/leinardi/opencode-swap/tree/opencode2-plugin-final).

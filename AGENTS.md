@@ -6,7 +6,7 @@ Guide for AI agents in this repo. Read before change anything.
 
 opencode-swap = **discontinued**. Repo about to be archived. `main` ships only
 `@leinardi/opencode-swap` 1.x on npm: an OpenCode 2 TUI plugin (`src/tui.ts`) that shows one
-warning asking users to remove it, nothing else. History holds the real code: tag `v0.4.7` (Python
+warning asking users to remove it, nothing else. History holds the real code: tag `v0.5.0` (Python
 CLI + OpenCode 1 TUI plugin), tag `opencode2-plugin-final` (unreleased OpenCode 2 plugin). Don't
 revive either here; a fork is the place.
 
