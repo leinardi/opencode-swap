@@ -1,359 +1,185 @@
 # Architecture
 
+`@leinardi/opencode-swap` is an OpenCode 2 TUI plugin. OpenCode 2 stores every account itself
+(the `credential` table of `opencode.db`) and already switches, renames, removes, exports and
+imports them. The plugin adds only what OpenCode lacks: a footer with the active account and its
+usage, the `/swap` cross-provider picker, `/swap-next` and `/swap-refresh`.
+
+Every OpenCode behaviour this document relies on is recorded, with source citations and sandbox
+evidence, in [`opencode-v2-integration.md`](opencode-v2-integration.md) (sections `V2` to `V14`
+below refer to it). When OpenCode's behaviour is in question, check and update that file rather
+than re-deriving it from the code here.
+
+Up to 0.4.x this repository was a Python CLI with its own credential vault for OpenCode 1. That
+code now lives on the `maint/0.4` branch; see [Releasing](releasing.md#the-04x-line).
+
 ## Tech stack
 
-- **Language/runtime:** Python 3.12+.
-- **CLI framework:** stdlib `argparse` (no third-party CLI framework — the
-  command surface is small enough that a framework would be net overhead).
-- **Packaging:** `hatchling` + `uv` (`pyproject.toml`), console scripts
-  `opencode-swap` and `ocs`.
-- **Dependencies:** `pyzipper` for password-encrypted portable account
-  archives. macOS goes through a
-  subprocess wrapper around the system `/usr/bin/security` CLI instead of a
-  Python keychain dependency.
-- **Testing:** `pytest`, no other test dependencies. No network access, no
-  real OS Keychain access, no real `auth.json` access required to
-  run the suite (see `docs/testing.md`).
-
-This mirrors `claude-swap`'s stack choice deliberately (same language,
-build system, and package-manager conventions) so the two tools stay easy
-to maintain side by side, and because `claude-swap`'s design — atomic
-writes, transaction/rollback, keychain-with-fallback — was the reference
-this project was modeled on.
+- **TypeScript on Bun.** OpenCode 2 runs plugins in its own Bun runtime. Development and CI
+  pin Bun 1.3.14.
+- **Solid, through `@opentui/solid`.** The footer is a Solid component. The host provides
+  `solid-js`, `@opentui/*`, `effect` and `@opencode/plugin` at runtime (`V4/V5`), so the
+  plugin's peers are optional and it installs nothing but itself.
+- **Types only from `@opencode/plugin` and `@opencode/theme`**, pinned at 2.0.20 (the minimum
+  OpenCode version) as dev dependencies, so a member newer than the minimum fails `tsc`. OpenCode
+  refuses a plugin-local copy of `effect` or `@opencode/plugin`, so neither may be imported at
+  runtime.
+- **Tests with `bun test`**, against injected fakes; nothing starts OpenCode (see
+  [Testing](testing.md)).
 
 ## Module map
 
-```
-src/opencode_swap/
-  cli.py              argparse wiring; formats output; never touches secrets directly
-  switcher.py         orchestration: add/use/remove/rename/restore/current, the FileLock scope
-  store.py            SecretStore (macOS Keychain/private-file routing) + Registry
-  models.py           dataclasses & enums: AccountMeta, AuthRecord, AccountDesc, Validity,
-                       SwitchTransaction, Platform, normalize_account_name
-  opencode_auth.py     read/atomic-write of OpenCode's auth.json (whole-file, generic)
-  providers/base.py    the Provider protocol (the one seam that varies per provider)
-  providers/api.py     generic canonical API-key provider
-  providers/openai.py  OpenAI API/OAuth behavior + ChatGPT usage lookup
-  providers/zai.py     generic API record + GLM Coding Plan usage lookup
-  providers/*.py       OAuth behavior proven safe for specific providers
-  oauth_jwt.py         JWT claim decoding (accountId/email extraction) — no network
-  paths.py             resolves OpenCode's auth.json path and opencode-swap's own data dir
-  backup.py            .bak / .pristine / unclaimed-*.json / discarded-restore-*.json snapshots
-  transfer.py          versioned password-encrypted account archive format
-  opencode2.py         migrate-to-opencode2: saved account <-> OpenCode 2 credential mapping,
-                       destination reading (`opencode auth export`) and planning
-  locking.py           FileLock (fcntl-based, POSIX only)
-  macos_keychain.py    subprocess wrapper around /usr/bin/security
-  process_detection.py best-effort "is OpenCode running" check
-  exceptions.py        exception hierarchy
-  atomic.py            shared atomic-write primitive (temp file + chmod + rename)
-integrations/
-  opencode-tui-plugin/ optional OpenCode TUI plugin; presentation + CLI subprocess bridge only
-```
-
-Responsibility boundaries are deliberate:
-
-- `opencode_auth.py` knows nothing about *which* provider is stored where —
-  it treats `auth.json` as an opaque JSON object and only guarantees safe
-  I/O.
-- `providers/openai.py` knows nothing about *how* auth.json is read/written,
-  or where secrets are stored — it only interprets one key's record.
-- `SecretStore` knows nothing about accounts or providers; `Registry` owns
-  provider-scoped non-secret account metadata and active hints.
-- `switcher.py` is the only module that ties all of the above together into
-  actual operations, and the only place that holds the lock.
-- The optional TUI plugin reads only `opencode-swap status --json` (and, by
-  default, `status --json --usage` every 60 seconds for the active managed
-  account, which makes an outbound request carrying that account's OAuth
-  access token — see the plugin README's "Network access" section) and
-  invokes existing CLI operations. It never reads credential storage or
-  `auth.json`, so it cannot bypass the switch transaction.
-
-Static API-key providers use `ApiProvider` without registration. OAuth is
-registered explicitly because the common OpenCode record shape does not imply
-common refresh, expiry, or identity behavior. Adding OAuth support requires a
-provider implementation plus source evidence and tests for those semantics.
-
-## The Provider seam
-
-```python
-class Provider(Protocol):
-    id: str
-    def extract(self, auth: dict) -> AuthRecord | None
-    def splice(self, auth: dict, record: AuthRecord) -> dict
-    def identity(self, record: AuthRecord) -> str
-    def identity_is_stable(self, record: AuthRecord) -> bool
-    def credential_values(self, record: AuthRecord) -> set[str]
-    def describe(self, record: AuthRecord) -> AccountDesc
-    def validate(self, record: AuthRecord) -> Validity
-    def refresh(self, record: AuthRecord) -> AuthRecord | None
-    usage_record_types: frozenset[str]
-    def fetch_usage(self, record: AuthRecord) -> UsageSnapshot | None
+```text
+src/
+  tui.tsx          the `./tui` entry: {id, setup}; wires the context into the store, the footer
+                   slot and the command layer, and tears all of it down on dispose
+  features.ts      runtime feature detection and the minimum OpenCode version (2.0.20)
+  state.ts         AccountStore: credential list, revision tracker, usage cache, request
+                   ownership, back-off, polling, events, the picker and activation
+  accounts.ts      the secret-free projection (AccountView), sort order, next account,
+                   provider-to-integration resolution, usage eligibility, footer account
+  session.ts       the current session's provider and integration, env connections
+  commands.ts      the keymap layer: /swap, /swap-next, /swap-refresh
+  footer.tsx       the prompt.footer component and its pace colours
+  bands.ts         window labels, reset times and pace bands for usage windows
+  options.ts       plugin options (usage, debug)
+  jwt.ts           JWT claim decoding for the OpenAI account id and email
+  usage/
+    http.ts        fetchJson: timeouts, no redirects, fixed-text failures
+    openai.ts      ChatGPT wham/usage request and parser
+    zai.ts         z.ai GLM Coding Plan quota request and parser
+    types.ts       UsageSnapshot and UsageWindow, and their validation helpers
+    index.ts       fetchUsage: the one dispatch from a UsageRequest to its endpoint
+scripts/
+  build.ts         per-file Solid transform of src/ into a mirrored dist/
+  check-tui-entry-compiled.sh   the packed payload is precompiled, ./tui-only, type-only
+  check-npm-resolution.sh       OpenCode's Arborist resolves the packed payload's peers
+  check-license-headers.sh      every source carries the MIT header
+  oc2-sandbox.sh                an isolated OpenCode install for integration work
 ```
 
-This is deliberately the *smallest* interface that made the real OpenAI
-provider implementation possible — it was derived from what
-`providers/openai.py` actually needed, not designed speculatively for
-providers that don't exist yet.
+Most new code belongs in an existing module. `state.ts` owns everything that schedules or
+outlives a call: timers, events, request lifetimes and dialogs. `usage/*` performs one request;
+the other modules are pure functions.
 
-Live usage lookup is part of this seam, not a branch in `Switcher`:
-`usage_record_types` declares which record types a provider can look up (empty
-for most, so `Switcher.fetch_usage` skips all lock/refresh work and reports
-`usage: n/a`), and `fetch_usage` performs the provider-specific network call
-(`providers/openai.py` → ChatGPT, `providers/zai.py` → the GLM Coding Plan
-quota endpoint). The shared `Switcher.fetch_usage` still owns live-record
-attribution, sync-back, and standalone-refresh gating around it. In particular there's no
-`DiscoverActiveCredentials`/`ActivateAccount` ceremony: the whole-file
-read/write is generic (`opencode_auth.py`), so a provider only needs to
-know how to read and write *its own* corner of the file.
+## Startup
 
-`identity()` deserves a note: for OpenAI OAuth it prefers the OpenAI
-`accountId` claim, falling back to the raw refresh token string if no
-account id is available yet. This mirrors `opencode-balancer`'s
-`authIdentityKey` approach (a second, independent implementation that
-arrived at the same fallback chain from reading the same OpenCode source),
-and is why `AccountMeta` (the *non-secret* registry) deliberately never
-caches the identity string. `identity_is_stable()` tells orchestration whether
-token rotation can change that value, replacing the old OpenAI-prefix check.
-The refresh-token fallback would otherwise leak
-a secret into `registry.json`.
+`setup(context)` first runs `missingFeatures` (`src/features.ts`): every context member the
+plugin calls, checked at runtime. If one is missing (OpenCode 2.0.17 has no
+`client.credential.list`, `V14`), it shows one toast, "opencode-swap needs OpenCode 2.0.20 or
+later.", and registers nothing. `engines.opencode` cannot do this: OpenCode 2 ignores it
+(`V4/V5`); it only keeps OpenCode 1 from loading the package (`V13`).
 
-## Storage layout
+Otherwise it builds one `AccountStore` from the context, then:
 
-```
-$XDG_DATA_HOME/opencode-swap/            (0700)
-  registry.json                          (0600) — provider -> name -> metadata; active per provider
-  registry.v1.json.bak                   (0600) — original registry retained after v1 migration
-  backups/                               (0700)
-    auth.json.bak                        (0600) — most recent pre-switch snapshot
-    auth.json.pristine                   (0600) — first-ever snapshot, written once
-    auth.json.restore                    (0600) — temporary restore source; retained if restore fails
-    unclaimed-<provider-hash>-<ts>-<suffix>.json (0600) — foreign login preserved instead of overwritten
-    discarded-restore-<ts>-<suffix>.json (0600) — full auth.json snapshot archived by
-                                          `restore --discard-pending` before dropping a stuck auth.json.restore
-  secrets/                               (0700, primary on Linux; macOS outage fallback)
-    v3-<sha256-key>.enc                  (0600) — AES-256-GCM envelope, macOS primary;
-                                          the record's data key lives in the Keychain, not this file
-    v2-<sha256-key>.enc                  (0600) — base64-obfuscated record (Linux primary,
-                                          macOS genuine-outage fallback); legacy openai_<name>.enc
-                                          files migrate on write
-  .lock                                  — FileLock target
+- appends the `Footer` to the `prompt.footer` slot (`V6`);
+- appends to the `app` slot a render that registers the command layer with `keymap.layer`, in
+  `mode: "global"`, and renders nothing. From `setup` itself the layer either never reaches slash
+  completion (default mode) or throws on 2.0.17 (`V6`);
+- starts the store: the first list, the 60 s poll and the event subscriptions.
 
-OpenCode's own state (read + atomically rewritten):
-  $XDG_DATA_HOME/opencode/auth.json      (0600, owned by OpenCode)
-```
+The function `setup` returns removes the slots and the layer and disposes the store.
 
-`registry.json` never contains a token. On macOS, the actual OAuth/API-key
-record for each saved account is AES-256-GCM ciphertext in a `secrets/v3-*.enc`
-file; its data key lives in the macOS Keychain under service `opencode-swap`,
-keyed by `"<provider>:<name>"`. This exists because `security -i`'s stdin
-transport truncates around 4095 characters (see `macos_keychain.py`) — far
-below a hex-encoded OAuth record — while the data key is a fixed 64 hex chars
-regardless of credential size, so it always fits. On Linux, and during a
-genuine macOS Keychain outage, the record itself is a base64-obfuscated
-`secrets/v2-*.enc` file instead.
+## Credentials and the secret boundary
 
-Registry v2 scopes account names and active hints by provider. Migration from
-v1 is atomic and does not move secrets because v1 already used provider-scoped
-secret keys. A durable v1 registry backup is written before v2 publication.
+`client.credential.list()` returns every stored credential with its value: OAuth tokens and API
+keys (`V7`). The values never reach UI state:
 
-## The switch algorithm (`Switcher.use_account`)
+- **`AccountView`** (`src/accounts.ts`) is the only shape in exposed state: id, integration,
+  label, active, kind, and for display the OpenAI email (from the access token's claims) or a
+  static key's last 4 characters (`…abcd`, keys of 20 or more characters only). It is built field
+  by field, never by spreading the entry, so a field OpenCode adds later cannot ride along.
+- **`usageRequest(entry)`** reads the secret a usage lookup needs from the live entry at request
+  time and hands it to that one request. Nothing stores it.
+- **A value the plugin does not recognize** (an unknown credential type, or a known type
+  missing a field OpenCode's own schema requires) is `kind: "unknown"`: listed and switchable by
+  label, never given an email or a usage lookup. An entry whose envelope (`id`, `integrationID`,
+  `label`) is malformed is left out: it can be neither shown nor activated.
 
-```
-use <provider> <target>:
-  acquire FileLock(data_root/.lock)                    # serialize our own invocations
-  target = registry.accounts()[provider][name]         # error if unknown
-  target_record = secrets.get("<provider>:<name>")      # error if missing (out-of-sync store)
+Accounts sort by integration, then label, then id. `/swap-next` takes the account after the
+integration's active one in that order, wrapping around.
 
-  live = read auth.json (or {} if it doesn't exist yet)
-  write_pristine_if_absent(live)                        # first-ever snapshot, once
+## The current session's provider
 
-  # --- sync-back ---
-  live_record = provider.extract(live)
-  if live_record belongs to a *managed* account (identity match):
-      if it differs from what's stored for that account:
-          secrets.put(owner, live_record)                # capture rotation
-  elif live_record exists but matches no managed account:
-      backup.write_unclaimed(live_record)                 # foreign login, don't lose it
-  # -----------------
+The footer and `/swap-next` act on the provider the current session uses (`V9`), resolved by
+`src/session.ts` in this order:
 
-  backup.write_bak(live)                                 # pre-swap snapshot
-  new_auth = provider.splice(live, target_record)         # merge into a fresh copy
-  atomic_write_auth(new_auth)                             # temp(0600) + os.replace
-  registry.set_active(provider, name)
+1. the session's committed model, `data.session.get(id).model.providerID`;
+2. the model of the session's last assistant or `model-switched` message;
+3. `ui.model.current()`, the prompt's selection (the only source on the home route).
 
-  release lock
-```
+The provider becomes an integration through `data.location.provider.list()`:
+`provider.integrationID ?? provider.id` (`V8`). The mapping is never assumed to be the identity
+(the OpenCode Console's providers all map to `opencode`), and an unlisted provider resolves to
+nothing.
 
-Everything before the `atomic_write_auth` call is either a read, or a write
-to opencode-swap's *own* storage (secret store, `.bak`) — none of it touches
-OpenCode's live state. The atomic write is the one moment OpenCode's world
-changes, and it's genuinely atomic (temp file in the same directory, fsynced,
-then `os.replace`, then the directory itself fsynced), so neither a crash nor
-a power loss during that specific call can leave a truncated or partial
-`auth.json` — it either fully lands or the original file is untouched.
+An integration whose active connection is an environment variable (`connections[0].type ===
+"env"`, `V8`) shows no footer: the stored label would name a credential OpenCode is not using.
 
-### Why sync-back is mandatory
+## Usage: revisions, ownership, cache
 
-OpenCode rotates the OAuth access *and* refresh token in place on every
-token refresh, rewriting `auth.json` itself
-(see `docs/opencode-auth.md#refresh`). If `opencode-swap` didn't recapture
-that rotation before switching away from an account, the *next* time that
-account is reactivated it would carry a dead refresh token — and since the
-rotated token only ever existed in `auth.json`, which is about to be
-overwritten, it would be gone for good, not just stale. This is why
-sync-back happens unconditionally on every `use`, not just when the caller
-asks for it.
+A credential's value can change with no event: OpenCode refreshes tokens with value-only
+updates, provider plugins rewrite inactive credentials at startup, and a `--standalone` client
+writes the DB without telling the TUI (`V7`, `V12`). The store therefore keys usage on what the
+value is, not on the credential id.
 
-Reads sync back opportunistically too, not just `use`: `Switcher._ensure_refreshed`
-lets `fetch_usage`/`account_validity` prefer the live `auth.json` record for
-whichever account it can be positively attributed to via a genuine identity
-match (`_live_attribution` — deliberately *not* the registry's active-name
-hint used just above; that hint only ever justifies *refusing* an ambiguous
-live credential here, never accepting one, for the same reason `use_account`
-never treats it as proof of ownership), and captures a drifted live record
-into the secret store as a side effect of that read. This rescues a
-rotation that would otherwise sit unclaimed until the next `use`, and is
-also what stops a read from reporting a perfectly healthy active account as
-expired just because it predates that rotation. The live-check, sync-back,
-and any standalone refresh all happen inside one `self.lock` acquisition
-(see `_ensure_refreshed`'s docstring) so a concurrent `use_account` can
-never be caught mid-sync-back by a read that trusts a live snapshot
-computed before the lock was acquired, and so a standalone refresh (see
-below) can never fire for an account that became live-active while a
-caller was waiting for the lock.
+- **Revision tracker.** On every list the store hashes each credential's canonical value
+  (SHA-256, Web Crypto) and keeps `credentialID → {digest, revision}`. A changed digest bumps a
+  global, non-secret revision counter. The revision key is `credentialID#revision`. The tracker
+  is private: digests never reach exposed state.
+- **Request ownership.** Each usage request captures its credential's generation and revision
+  key and gets an `AbortController`. A switch or update event, a revision change or dispose
+  bumps the generation and aborts it. A result is applied only if the store is not disposed and
+  both still match, so a late answer for a replaced token or a switched account is dropped.
+- **Cache.** Results are cached by revision key and stamped when the request starts. An entry
+  is fresh for 55 s: the 60 s poll minus the 5 s list timeout, so every poll finds the previous
+  result stale and the footer refreshes on each one. `/swap-refresh` and switch or update events
+  clear it (an update event carries no payload, so it clears every integration, `V7`).
+- **Back-off.** A 401 or 403 stops lookups for that revision key until `/swap-refresh` or a
+  switch or update event. A replaced value is a new key, so it is retried at once.
+- **Lists.** Lists are serialized, and each one gives up after 5 s, so a request that never
+  settles (a stale client after a reconnect, `V7`) shows as an error instead of blocking the
+  plugin.
 
-`_live_attribution` also reports *ambiguous* (distinct from "not live") in
-two cases, and a standalone refresh never fires in either: auth.json exists
-but can't be read or parsed (a genuinely absent file safely means "nothing
-live," but a present-and-unreadable one might still hold the account's live
-credential — the two must not be conflated), and an unmatched live record
-exists while the queried account is this provider's registry-active account
-with a matching type and an unstable stored identity (the shape of OpenCode
-rotating that account's token onto a new one that happens to gain a stable
-`accountId` claim the old one lacked — the stored identity, computed from
-the old claim, no longer matches, even though nothing is actually wrong).
-Both cases fall back to the stored record exactly as before, just without
-ever attempting a refresh — refreshing the stored copy there could spend a
-refresh token the live state has already superseded.
+The footer's first render, and every later change of the session's integration, looks the
+active account's usage up at once rather than at the next poll: home and every session render
+their own prompt, so navigating mounts a new footer.
 
-### Transaction and rollback
+## The picker and activation
 
-`SwitchTransaction` records which steps completed
-(`sync_captured` / `unclaimed_stashed` / `bak_written` / `auth_written` /
-`registry_written`). If anything raises, `_rollback` runs — but it only has
-one real job: **if `auth_written` happened, restore `auth.json` to its
-pre-switch content.** Every step before that either hasn't touched OpenCode's
-live state yet (so there's nothing to undo), or — for the atomic write
-itself — is guaranteed by construction to leave the original file untouched
-on failure. The one case rollback actually matters for in practice: the
-`atomic_write_auth` call succeeds, but the subsequent `registry.set_active`
-call fails (disk error, corrupt registry, etc.) — without rollback, OpenCode
-would be left running the new account while opencode-swap's own bookkeeping
-still thought the old one was active.
+`/swap` lists, then looks up usage for every eligible account, at most 4 at a time and for at
+most 5 s overall (each request also times out after 5 s); the dialog then opens with `…` for
+whatever is still pending. Options are grouped by integration (`category`), with the label as
+title, the email or key hint as description, and `active` or a usage summary as footer.
 
-Note `registry.json`'s per-provider `active` field is informational only — `current()`
-always re-derives "who's actually active" by matching the live record's
-identity against saved accounts, not by trusting the `active` field. This is
-deliberate: even if `set_active` silently drifted, `current` still reports
-the truth.
+Both `/swap` and `/swap-next` end in a confirmation, then `client.credential.activate`:
 
-### Backups and recovery
+- a cancelled or dismissed dialog never activates;
+- a rejected `activate` shows an error toast and changes nothing displayed. The displayed active
+  account only ever changes from a fresh list or the `credential.switched` event, never
+  optimistically;
+- the session's model is never touched. The success toast notes when the current session uses
+  another integration and is unaffected.
 
-`.bak` and `.pristine` exist so a human (or `opencode-swap restore`) can
-recover even if the transaction rollback itself can't run (e.g.
-opencode-swap was killed outright). `restore` chains the *current* live
-state into `.bak` before overwriting it, so a restore is itself always
-undoable by restoring again — and it tolerates the live file being
-corrupted JSON (that's exactly the scenario it exists for) as well as a
-backed-up record that can no longer be interpreted (the restore still
-succeeds; only "which account is this" identification is skipped).
+`activate` is the plugin's only write. It never creates, updates or removes a credential, never
+refreshes a token and never calls a token endpoint: OpenCode refreshes the active credential
+lazily on its own requests (`V12`), and a second refresher would race it for single-use refresh
+tokens.
 
-## Portable account transfer
+## Packaging
 
-`export <path>` packages every registry entry with its corresponding secret
-record in a versioned manifest, then encrypts that manifest in memory using
-the standard WinZip AES-256 format implemented by `pyzipper`. The encrypted
-archive is published atomically with mode `0600`; plaintext credentials are
-never written to a temporary file. Export holds `Switcher.lock` and first
-captures recognizable live token rotation, for the same reason sync-back is
-mandatory before a switch. If the live record does not match a managed
-identity but has the same provider and type as the registry-active account,
-export refuses: an account-id/refresh-token identity transition cannot safely
-be distinguished from a foreign login.
+OpenCode 2 loads a package's `./tui` export, whose default export must be `{id, setup}`
+(`V4/V5`). The published payload is shaped by three facts:
 
-`import <path>` decrypts in memory and strictly validates the archive version,
-manifest shape, provider schema, account names, record types, and duplicate
-identities. While holding `Switcher.lock`, it resolves destination name
-conflicts as skip, overwrite, or abort, then preflights identities and
-unregistered secret keys. Identity conflicts under different names abort before
-the first write. Selected secrets are written through `SecretStore`, followed
-by one atomic registry publication; a failure attempts to restore overwritten
-secrets and remove newly written secrets. Printable metadata is derived from
-validated records and filtered against credential fields from every account in
-the archive, preventing one account's token from entering another account's
-registry metadata. Import never changes OpenCode's live `auth.json` or the
-destination registry's active markers. Archive v2 scopes conflicts by
-`(provider, name)` and import remains compatible with archive v1.
+- **`exports` is exactly `{"./tui": "./dist/tui.js"}`.** A `"."` export makes
+  `opencode plugin add` register the package as a server plugin (`V4/V5`).
+- **The output is precompiled.** OpenCode's runtime Solid transform skips `node_modules`, and a
+  raw `.tsx` from npm fails to load (`V4/V5`). `scripts/build.ts` runs `@opentui/solid`'s
+  `transformSolidSource` on every file under `src/`, into a mirrored `dist/`, rewriting relative
+  imports to `.js`.
+- **The peers resolve under OpenCode's installer.** OpenCode installs plugins with Arborist
+  9.4.0, `audit: false`, `ignoreScripts: true` and no `legacyPeerDeps` (`V4/V5`); a peer conflict
+  Bun only warns about makes the plugin uninstallable.
 
-## Moving to OpenCode 2
-
-`migrate-to-opencode2` prints saved accounts as OpenCode 2 credential entries for
-`opencode auth import`. Every OpenCode 2 behaviour it relies on is recorded in
-[`opencode-v2-integration.md`](opencode-v2-integration.md).
-
-- **Read-only vault.** The CLI opens this command's `Switcher` with `read_only=True`. That skips
-  the data-root `mkdir`/`chmod` and the registry migration, and builds a read-only `SecretStore`
-  and `Registry` before anything reads the vault. A v1 registry is converted in memory
-  (`store.convert_v1`, shared with `Registry.migrate`). An orphaned sealed file is refused
-  instead of garbage-collected. Every write API raises, and `@_writable` refuses the mutating
-  `Switcher` operations up front. `_ensure_refreshed` neither syncs a live record back nor
-  refreshes, because a refresh would spend a single-use token that a read-only vault could not
-  replace. The lock is still taken; `.lock` is the one file read-only mode may create, and only
-  inside an existing data root (`FileLock(create_parent=False)`). The vault therefore stays
-  byte-for-byte usable by 0.4.x.
-- **Source.** `Switcher.migration_source` takes each saved account's live record when
-  `_live_attribution` positively attributes it (OpenCode 1 rotates tokens in place), and the
-  stored record otherwise. It refuses the whole run on an ambiguous attribution, and reports
-  live logins that match no saved account.
-- **Destination.** `opencode2.read_destination` requires OpenCode 2.0.20 or newer, runs
-  `opencode auth export --standalone` in memory, and parses the result strictly against
-  OpenCode 2's credential schema.
-- **Planning.** `opencode2.plan_migration` leaves out accounts the destination verifiably holds:
-  same integration, and equal `Provider.identity` of the reverse-mapped record. It warns when
-  the destination holds credentials it cannot compare. Because `auth import` skips existing ids
-  without comparing values, it refuses when a deterministic id already exists without verified
-  ownership. The mapping mirrors OpenCode 2's legacy `auth.json` import; the golden fixture
-  `tests/fixtures/opencode2_legacy_import.json` pins it.
-
-## Concurrency
-
-Two levels:
-
-- **opencode-swap vs. itself:** `FileLock` (`fcntl.flock`, exclusive,
-  non-blocking, polled with a timeout) around `data_root/.lock`, held across
-  every mutating `Switcher` method. Verified under real multi-thread
-  contention (`tests/test_locking.py`,
-  `tests/test_concurrency.py`) — never more than one holder at a time, and a
-  race between two switches always ends with a valid, complete `auth.json`
-  matching exactly one account, never a corrupted or blended file.
-- **opencode-swap vs. a running OpenCode:** there is no cooperative lock to
-  join — OpenCode's own `Auth.set` does an unlocked, non-atomic
-  read-merge-write (see `docs/opencode-auth.md`). `process_detection.py`
-  does a best-effort check (`pgrep -x opencode`) and the CLI warns/prompts
-  before switching if it's running. This is advisory, not a real mutex —
-  the honest fail-safe here is opencode-swap's own atomic write (so *its*
-  side can never be caught half-written), plus `.bak`/`restore` for
-  recovering if a race did land badly.
-
-## Compatibility posture
-
-OpenCode's `auth.json` path, JSON shape, and provider key names are
-undocumented internals that can change across versions. `providers/openai.py`
-validates every record it reads against the known shape and raises
-`SchemaError` — never silently drops or guesses at fields — so an
-incompatible future OpenCode version fails loud (`doctor`/`current`/`add`/
-`use` all surface it) instead of corrupting state. See
-`docs/opencode-auth.md` for exactly which behaviors are cited from source
-vs. inferred, and `AGENTS.md` for a real bug of this class that was caught
-and fixed (`current()` was accidentally swallowing `SchemaError`).
+`check-tui-entry-compiled.sh` and `check-npm-resolution.sh` check the packed tarball for each,
+in CI and before every publish.

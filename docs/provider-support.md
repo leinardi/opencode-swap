@@ -1,77 +1,66 @@
 # Provider support
 
-## Verification status
+The plugin lists and switches every credential OpenCode 2 stores, whatever the provider: it
+reads OpenCode's credential list and calls `credential.activate`, both provider-independent.
+What differs per provider is what it can show about an account, and whether it can look usage
+up.
 
-**OpenAI is the only provider tested end to end with real accounts.** Every
-other entry below is implemented from OpenCode source, pinned plugin source,
-and synthetic automated tests. Maintainer does not have accounts for those
-services. Testers are wanted for every non-OpenAI provider; report provider,
-auth method, OpenCode version, and sanitized observations without credentials.
-Use [`provider-research-prompt.md`](provider-research-prompt.md) to generate a
-safe, source-backed report for a dedicated GitHub issue.
+## What each credential shows
 
-OpenCode checkout analyzed at commit
-`7534d23551f665e65080809975b4ca5c7d63807b` (2026-07-25). External built-ins
-were inspected at versions pinned by that checkout:
+OpenCode 2 stores three credential types (`packages/schema/src/credential.ts:32-70` in OpenCode
+2.0.29): `oauth {methodID, refresh, access, expires, metadata?}`, `key {key, metadata?,
+configuration?}` and `external {methodID, metadata?}`.
 
-- `opencode-gitlab-auth@2.1.0`
-- `opencode-poe-auth@0.0.1`
+| Integration and type | Picker description | Usage | Notes |
+| --- | --- | --- | --- |
+| `openai`, `oauth` (any method) | the email in the access token's claims | ChatGPT `wham/usage` | see [the open item](#open-items) on `chatgpt-token-sharing` |
+| `zai-coding-plan`, `key` | the key's last 4 characters | z.ai GLM Coding Plan quota | the plain `zai` pay-as-you-go integration has no quota endpoint |
+| any other integration, `key` | the key's last 4 characters | none |  |
+| any other integration, `oauth` or `external` | none | none |  |
+| a value the plugin does not recognize | none | none | still listed and switchable by label |
 
-## Why records need provider-specific handling
+- **Key hints** appear only for keys of 20 or more characters, so at least 16 characters of a
+  short, possibly hand-picked key always stay hidden.
+- **Emails** come only from OpenAI access tokens: the `email` claim, or the one under
+  `https://api.openai.com/auth`. Some real tokens carry neither, and then the row has no
+  description. Other providers' tokens are not decoded.
+- **Unrecognized values** (a credential type newer than the plugin, or a known type missing a
+  field OpenCode's schema requires) are never read field by field: the account keeps its label
+  and stays switchable, with no description and no usage.
 
-OpenCode stores only three top-level record types: `api`, `oauth`, and
-`wellknown`. Provider ID is outer `auth.json` key. Static API records use a
-common runtime path, but OAuth providers assign different meaning to expiry,
-refresh, and account fields. opencode-swap accepts arbitrary canonical API
-records while requiring explicit implementations for OAuth.
+## The footer's provider
 
-| Provider/auth | Status | OpenCode behavior relevant to switching |
-| --- | --- | --- |
-| OpenAI API/OAuth | ✅ Supported; end-to-end tested | OAuth rotates tokens and usually has stable `accountId` |
-| Arbitrary canonical API provider | ⚠️ Supported; testers wanted | Static `key`; optional string-to-string metadata |
-| GitHub Copilot OAuth | ⚠️ Supported; testers wanted | Durable token in `refresh` and `access`; `expires=0` means usable |
-| Poe API/OAuth | ⚠️ Supported; testers wanted | Browser flow yields API key; no refresh rotation |
-| xAI API | ⚠️ Supported; testers wanted | Canonical API record |
-| xAI OAuth | ⚠️ Guarded support; testers wanted | Rotates tokens; accepted only when access JWT has stable `iss` and `sub` |
-| Z.AI GLM Coding Plan (`zai-coding-plan`) | ⚠️ Supported; testers wanted | Canonical API record; `list --usage` also reads the GLM Coding Plan quota endpoint |
-| DigitalOcean | ⚠️ Generic API support; testers wanted | Browser OAuth result is stored as API record; metadata may change |
-| Azure/Cloudflare/Snowflake PAT/GitLab PAT/Bedrock/SAP | ⚠️ Generic API support; testers wanted | Canonical API record, sometimes with required metadata |
-| GitLab OAuth | ❌ Unsupported | Refresh rotates; stored record has no provably stable user identity |
-| Snowflake OAuth | ❌ Unsupported | `accountId` identifies account/tenant and may not identify user |
-| Well-known URL auth | ❌ Unsupported | Remote command/environment-token mechanism, not normal provider accounts |
-| Custom/unknown OAuth | ❌ Unsupported | Shape alone cannot prove safe identity and refresh semantics |
+The footer and `/swap-next` follow the current session's provider and map it to its
+integration through OpenCode's provider list: `integrationID ?? id`
+(`packages/core/src/model-resolver.ts:376-378`). In a sandbox, `openai`, `zai-coding-plan`,
+`opencode`, `deepseek` and `github-copilot` all mapped to themselves; the OpenCode Console's
+providers map to `opencode`. An integration whose active connection is an environment variable
+(such as `OPENAI_API_KEY` or `ZHIPU_API_KEY`) shows no footer, since the stored label would name
+the wrong credential. Details: [`opencode-v2-integration.md`](opencode-v2-integration.md), `V8`
+and `V9`.
 
-Failing closed matters: assigning a rotated but unidentifiable live credential
-to wrong saved account could destroy that saved account's previous credential.
-Unsupported OAuth records raise `SchemaError` before live state is overwritten.
+## Usage lookups
 
-## Live usage lookup
+| Integration | Endpoint | Sent | Windows |
+| --- | --- | --- | --- |
+| `openai` | `GET https://chatgpt.com/backend-api/wham/usage` | access token as `Bearer`, `ChatGPT-Account-Id` when the token carries one | read from `limit_window_seconds` (today 5 hours and 7 days) |
+| `zai-coding-plan` | `GET https://api.z.ai/api/monitor/usage/quota/limit` | API key as `Bearer` | each `CREDIT_LIMIT` (older responses: `TOKENS_LIMIT`) entry's `unit`/`number` (`unit` 3 = hour, 4 = day, 5 = 30 days, 6 = week) |
 
-`list --usage` / `status --usage` fetch a live quota snapshot for providers
-that expose one. This is opt-in per invocation — a plain `list` / `status` is
-fully offline. For a saved OpenAI OAuth account that is *not* the one OpenCode
-currently has live, an expired stored token is refreshed first (a `POST` to
-OpenAI's token endpoint via `oauth_refresh.py`) before the usage `GET`;
-otherwise the usage request is the only call. Coverage:
+Window lengths are read from each response, never assumed, and label the footer's entries
+(`5h`, `7d`). A response of any other shape is "unexpected response shape" and shows `n/a`.
+These parsers are ports of the 0.4.x CLI's, with the differences recorded under "Deviations
+and open items" in [`opencode-v2-integration.md`](opencode-v2-integration.md).
 
-| Provider | Endpoint | Auth sent |
-| --- | --- | --- |
-| OpenAI ChatGPT OAuth | `https://chatgpt.com/backend-api/wham/usage` | account access token (Bearer) + `ChatGPT-Account-Id` |
-| Z.AI `zai-coding-plan` | `https://api.z.ai/api/monitor/usage/quota/limit` | account API key (Bearer) |
+Adding a provider's usage needs its endpoint, its authentication and a documented or observed
+response shape, plus fixed-text failures and leak tests like the existing two
+(`test/usage-openai.test.ts`, `test/usage-zai.test.ts`). The plugin never refreshes a token to
+look usage up: an expired access token shows `n/a` until OpenCode refreshes it.
 
-Window lengths are read from the response, never hardcoded: OpenAI's from
-`limit_window_seconds`, Z.AI's from the `unit`/`number` pair on each
-`CREDIT_LIMIT` entry (`unit` 3=hour, 4=day, 5=month, 6=week). A plain `zai`
-pay-as-you-go key is not registered — the quota endpoint is coding-plan-only.
-Every other provider reports `usage: n/a`.
+## Open items
 
-## Source evidence
-
-- Common schemas and whole-file writes: `packages/opencode/src/auth/index.ts:14-36,58-89`
-- Generic API-key loading: `packages/opencode/src/provider/provider.ts:1530-1541,1668-1715`
-- OpenAI refresh/write-back: `packages/opencode/src/plugin/openai/codex.ts:355-380`
-- xAI refresh/write-back: `packages/opencode/src/plugin/xai.ts:485-517`
-- Snowflake refresh/write-back: `packages/opencode/src/plugin/snowflake-cortex.ts:298-367`
-- Copilot durable token and zero expiry:
-  `packages/opencode/src/plugin/github-copilot/copilot.ts:280-305`
-- Built-in registration: `packages/opencode/src/plugin/index.ts:12-22,64-81`
+- **`chatgpt-token-sharing`.** OpenCode 2's default ChatGPT login stores this method; older
+  logins, and those imported from OpenCode 1, use `chatgpt-browser`. Whether `wham/usage`
+  accepts token-sharing tokens needs a real login to check. Until then every OpenAI OAuth
+  method is eligible, and a refusal shows `n/a` and backs off.
+- **Real usage numbers** from ChatGPT and z.ai accounts have not been seen with this plugin
+  yet: the sandbox only ever had fake tokens, which both endpoints refuse.

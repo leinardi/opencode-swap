@@ -1,206 +1,94 @@
 # Security
 
+The plugin runs inside OpenCode 2's TUI process with OpenCode's own access to every stored
+credential: `client.credential.list()` returns OAuth tokens and API keys in full (see
+[`opencode-v2-integration.md`](opencode-v2-integration.md), `V7`). Its job is to use that access
+for as little as possible and to show none of it.
+
 ## Threat model
 
 ### In scope
 
-- Accidental disclosure through ordinary filesystem browsing.
-- Other non-privileged users on the same machine.
-- World/group-readable files or directories caused by bad default
-  permissions.
-- Tokens appearing in logs, CLI output, or error messages.
-- Tokens appearing in process arguments (visible via `ps`/process listings).
-- Unsafe temporary files during a write.
-- Backups (`.bak`/`.pristine`) containing plaintext credentials at rest.
-- Portable account archives exposed during cross-machine transfer.
+- Credential values in anything the plugin shows or emits: the footer, dialogs, toasts, thrown
+  errors, logs, and the plugin's exposed state.
+- Credential values sent anywhere other than the account's own usage endpoint.
+- A response, redirect or error message that would carry a credential back into what the
+  plugin shows.
+- The plugin changing credentials beyond what the user asked: creating, editing, removing or
+  refreshing one, or switching without confirmation.
+- A late answer for a replaced token or a switched account being shown as current.
+- The published package carrying code that is not what this repository builds, or that
+  OpenCode would load differently from how it was tested.
 
-### Explicitly out of scope
+### Out of scope
 
-An attacker who already has the user's UID, or access to an unlocked
-session, can already read whatever OpenCode itself can read — OpenCode's own
-`auth.json` is a plaintext file protected only by `0600` permissions, on
-every platform it runs on (see `docs/opencode-auth.md`). `opencode-swap`
-protects credentials **at rest at least as well as OpenCode does**, and
-better than storing them in a plaintext SQLite database, but it does not —
-and cannot — defend against a same-UID adversary, a compromised kernel/root,
-or memory scraping. This boundary is deliberate, not an oversight: matching
-OpenCode's own trust boundary is the honest target; claiming more would be
-false security.
+- **A same-user attacker, root, or memory scraping.** OpenCode 2 keeps credentials in
+  `opencode.db`, readable by the user, and the plugin runs in OpenCode's process. Anything that
+  can read either already has every credential; the plugin adds no storage of its own to
+  protect.
+- **OpenCode itself.** How OpenCode stores, refreshes and sends credentials is OpenCode's
+  boundary. The plugin neither weakens nor strengthens it.
+- **Other plugins.** Every plugin in the TUI gets the same context. The plugin cannot hide
+  credentials from another plugin, and does not try.
+- **A malicious usage endpoint.** The account's credential goes to its own provider, which
+  already holds it. What comes back is parsed strictly and shown as numbers only.
 
-### Network calls
+## What the plugin does with credentials
 
-`opencode-swap` is local/offline-only except for the opt-in exceptions below,
-all gated behind an explicit CLI flag or subcommand — never triggered by a
-plain `list`/`status`/`current`:
+- **Reads** them only through `client.credential.list()`, never from `opencode.db`,
+  `auth.json` or any file under OpenCode's directories.
+- **Projects** each one into a secret-free `AccountView` (id, integration, label, active, kind,
+  the OpenAI email from the access token's claims, a static key's last 4 characters). Only that
+  reaches UI state. The last 4 characters are shown only for keys of 20 or more characters, so
+  at least 16 always stay hidden.
+- **Hashes** each value (SHA-256, Web Crypto) to notice a value that changed without an event.
+  The digest stays inside the store's private revision tracker.
+- **Sends** a value only in a usage request for that same account (see below), read from the
+  live entry at request time and kept nowhere after.
+- **Writes** only by `client.credential.activate`, after a confirmation. Never
+  `credential.create`, `update` or `remove`, never a token refresh, never a token endpoint, and
+  never OpenCode's plugin `storage` (enforced by ESLint `no-restricted-syntax`).
 
-- `usage.py` — live usage lookup, only from `list --usage`/`status --usage`,
-  sending the saved account's own credential as Bearer auth to that
-  provider's usage endpoint: OpenAI ChatGPT OAuth sends the OAuth access
-  token to `GET https://chatgpt.com/backend-api/wham/usage`; Z.AI
-  `zai-coding-plan` sends the account API key to
-  `GET https://api.z.ai/api/monitor/usage/quota/limit`. Error output from
-  these requests is fixed text or an HTTP status code only — the Bearer
-  value is never stringified into a message even when the underlying
-  library embeds it in an exception.
-- `oauth_refresh.py` — `POST https://auth.openai.com/oauth/token`, from
-  `list --usage`/`status --usage` (only for a saved account that isn't the
-  one OpenCode currently has live and whose stored token has expired) and
-  from the explicit `refresh` command, sending a saved account's refresh
-  token.
+No custom cryptography: the digest is a change detector, not a protection.
 
-**Rotation-loss window.** OpenAI issues a new refresh token on every grant
-and invalidates the old one. `Switcher._ensure_refreshed` persists the
-rotated token to the secret store immediately after the grant succeeds, and
-holds `self.lock` for the whole refresh+persist sequence so two concurrent
-`opencode-swap` invocations can't spend the same single-use token. The
-residual risk is a crash or `SIGKILL` between the grant completing and the
-`secrets.put` call landing: the old token is already dead, the new one is
-lost, and the account needs `opencode auth login` + `opencode-swap add`
-again. This window is real but narrow (no network I/O in between, no
-partial-write hazard beyond that already covered by `store.py`'s own atomic
-writes) and is not mitigated further, the same tradeoff `use_account`'s
-sync-back already accepts for OpenCode's own in-place rotation.
+## Network calls
 
-## Storage backend comparison
+The only requests the plugin makes:
 
-| Approach | Linux | macOS | Headless Linux | Dependencies | If unavailable |
-| --- | --- | --- | --- | --- | --- |
-| **OS keychain** | n/a | Keychain via `/usr/bin/security` | n/a | none | falls back to files |
-| Linux Secret Service | interactive unlocks and D-Bus availability | n/a | often absent | `keyring` | can block indefinitely |
-| Encrypted vault (age/libsodium + passphrase) | possible | possible | works | new crypto dependency + passphrase UX | — |
-| Filesystem-only, `0600` | **chosen** | fallback | **chosen** | none | n/a — always available |
-
-**Chosen for v1: private `0600` files on Linux; on macOS, an AES-256-GCM
-envelope whose data key lives in the Keychain, with a sticky plaintext-file
-fallback for a genuine outage.**
-
-Pre-release Linux checkouts briefly used Secret Service. No published version
-used that backend. Those checkouts must export accounts before updating and
-import them afterward; normal commands do not probe legacy keyrings because a
-locked or unhealthy service can prompt interactively or block indefinitely.
-
-- **macOS:** the system `security` CLI, pinned to `/usr/bin/security`
-  (not resolved via `PATH`, to prevent an attacker-controlled binary earlier
-  on `PATH` from intercepting secrets). Every value passed to it is via
-  **stdin**, not argv, so it never appears in a process listing. This mirrors
-  `claude-swap`'s approach exactly, including its reasoning for *not* using
-  the third-party `keyring` library on macOS: Keychain items are
-  created/read by the same stable system binary, so reads stay silent
-  across `opencode-swap` upgrades. A Python-library-based approach
-  (`keyring`, or any in-process Security.framework call) ties the item's
-  access to the interpreter binary itself, which a tool upgrade can rebuild
-  — at which point macOS may show a "wants to use your keychain" prompt.
-  `security -i`'s stdin transport truncates a command around 4095
-  characters (measured; see `macos_keychain.py`), well below a hex-encoded
-  OAuth record — so the Keychain never holds the credential directly.
-  Instead it holds a 32-byte AES-256-GCM data key (`sealed.py`), a fixed 64
-  hex chars regardless of credential size, and the credential is ciphertext
-  in a `secrets/v3-*.enc` file, AAD-bound to its `"<provider>:<name>"` key
-  so a ciphertext file copied or renamed onto another account fails to
-  decrypt rather than silently reading as that account's credential.
-  `pycryptodomex` is already a transitive dependency of `pyzipper` (used for
-  portable export/import); this is the same library, declared directly.
-- **Linux:** a base64-encoded blob in a `0600` file under a `0700` directory.
-  This is **obfuscation, not encryption** — anyone with read access to the file
-  can decode it. OpenCode stores the same credentials as raw JSON in its own
-  `0600` `auth.json`, so this deliberately matches its trust boundary. Secret
-  Service was rejected because `opencode-swap` must make routine reads without
-  prompts: `list`, switching identity checks, and optional TUI status polling
-  all load stored credentials. Secret Service may ask the user to unlock a
-  keyring on any of those reads; a locked or unhealthy D-Bus service can block
-  the CLI indefinitely instead of returning an error for file fallback. A
-  keyring is therefore incompatible with a background status widget, not an
-  improvement over OpenCode's own private-file security model.
-- **macOS fallback:** the same private-file (base64, v2) backend as Linux,
-  used only when a Keychain operation fails for a genuine reason (locked,
-  denied, timed out) — not for credential size, which the envelope format
-  makes irrelevant.
-- **Sticky fallback:** once a macOS Keychain operation fails during a
-  process, that `SecretStore` instance pins itself to the file backend for
-  the rest of its life — it never flip-flops between backends mid-operation
-  even if the backend "recovers" partway through. Account deletion then
-  refuses rather than claiming an unreachable OS copy was removed.
-  (`store.py`)
-- **v3-wins-on-read (macOS), file-wins-on-read (v2/legacy), reconcile-on-write:**
-  a sealed v3 file is always authoritative when present — its Keychain data
-  key is the only thing that can decrypt it, so unlike v2 it cannot go stale
-  the way a plain fallback copy can. Absent a v3 file, a v2/legacy fallback
-  file is treated as authoritative on read (it may be fresher than a
-  stale/unreachable Keychain copy from a prior fallback episode). A
-  successful v3 (or, off macOS, v2) write deletes any stale older-format
-  file for that account afterward, best-effort. Ported from `claude-swap`'s
-  `credentials.py` and extended for the envelope format.
-- **Format upgrade:** an account still on the v2/legacy format is
-  transparently resealed into v3 the next time it's read while a mutating
-  command holds `Switcher.lock` (`SecretStore.upgrade`, swept once per
-  command) — no separate migration step, and no risk of two concurrent
-  processes minting two different data keys for the same account.
-
-Deliberately **not** built for persistent storage: any custom encryption
-scheme, app-managed key derivation, or a "vault" file. Those would add real
-complexity to the one-command switch workflow without moving the needle
-against the actual at-rest threat model — a same-UID attacker can already
-read OpenCode's live plaintext `auth.json`.
-
-Portable export is a separate, explicit operation rather than a persistent
-vault. It uses standard WinZip AES-256 through `pyzipper`; opencode-swap does
-not define cryptographic primitives or its own encrypted envelope. The
-passphrase is read from an interactive hidden prompt, never argv, and the
-manifest is encrypted and decrypted entirely in memory. Archives are written
-atomically with mode `0600`, never overwritten implicitly, and should be
-deleted after import. Archive filenames and compressed sizes are not secret;
-the sole member always has the generic name `accounts.json`. Users must choose
-a strong, unique passphrase; archive security depends on its entropy.
-
-## What's persisted where
-
-| Data | Location | Sensitive? |
+| Account | Request | Sent |
 | --- | --- | --- |
-| Provider-scoped account name, type, account id, email, added timestamp, active hint | `registry.json` (`0600`) | No — never a token (a static-key account's "account id" is the API key's last 4 chars only) |
-| Original registry before automatic v1-to-v2 migration | `registry.v1.json.bak` (`0600`) | No — never a token |
-| Access token, refresh token, API key | Linux `secrets/v2-*.enc` (`0600`, base64); macOS `secrets/v3-*.enc` (`0600`, AES-256-GCM) + Keychain data key, or `v2-*.enc` fallback on a genuine outage | Yes |
-| Pre-switch/pristine/unclaimed/discarded-restore `auth.json` snapshots | `backups/*.json` (`0600`, dir `0700`) | Yes — full credential records |
-| Explicit portable account export | User-selected path (`0600`, AES-256 encrypted) | Yes — delete after import |
-| `opencode-swap`'s own lock file | `.lock` (empty, no data) | No |
+| OpenAI OAuth | `GET https://chatgpt.com/backend-api/wham/usage` | access token as `Bearer`; `ChatGPT-Account-Id` from its claims when present |
+| z.ai `zai-coding-plan` key | `GET https://api.z.ai/api/monitor/usage/quota/limit` | API key as `Bearer` |
 
-The non-secret/secret split is enforced structurally: `AccountMeta` (the registry dataclass) has no
-field that could hold a token, and the one place identity derivation *could* use a credential value
-(`Provider.identity`) is never persisted to the registry — only recomputed on demand from data
-already loaded from the secret store. The single deliberate carve-out is that a static-key account,
-having no real account id, shows the API key's **last 4 characters** in that slot
-(`providers.common.key_account_hint`) so a listed row can be matched against the provider's own key
-dashboard; 4 trailing characters of a high-entropy key can neither reconstruct it nor narrow a
-brute-force, and the guard rejects keys short enough for that to matter. See
-`docs/architecture.md#the-provider-seam`. Provider implementations enumerate credential fields for
-archive metadata filtering. Unstable OAuth identities trigger preservation and refusal instead of
-guessing ownership.
+- **No other host.** Redirects are not followed (`redirect: "manual"`); a redirect reports its
+  HTTP status. Every other provider and credential type makes no request.
+- **Off switch.** The `usage` plugin option set to false (or any falsy-looking value) sends
+  nothing at all.
+- **Bounded.** Each request times out after 5 s; `/swap` runs at most 4 at once. After a 401 or
+  403 the account is not asked again until its value changes or the user runs `/swap-refresh`.
+- **No secret in a failure.** Every failure is fixed text: "request timed out", "network
+  error", "HTTP 401", "invalid JSON in response", "unexpected response shape" and similar. An
+  exception's own message, a header or a response body never reaches what the plugin shows. A
+  header value outside printable ASCII is refused before the request, as "malformed request",
+  so a runtime error cannot echo it.
 
-## Process hygiene
+## Diagnostics
 
-- No secret is ever passed as a command-line argument (visible via `ps`). The
-  macOS Keychain wrapper passes secrets over stdin specifically to avoid this;
-  Linux writes them directly through the atomic file primitive.
-- CLI output never includes an access token, refresh token, or API key.
-  Account ids are shown truncated to their last 4 characters, even though
-  an account id alone isn't secret — matching the stated output policy. For a
-  static-key account the same column shows only the API key's last 4
-  characters (see the carve-out above). Enforced by tests that plant a known
-  secret value and grep captured stdout/stderr for it.
-- Every file this project writes uses the same atomic-write primitive
-  (`atomic.py`): a `0600` temp file in the target's own directory, then
-  `os.replace`. No file is ever created world- or group-readable, even
-  momentarily — the mode is set on the temp file *before* the rename that
-  makes it visible under its real name.
+The plugin never calls `console.*` (ESLint `no-console`): OpenCode's log is a file other tools
+read. The `debug` option only explains why the footer is hidden, with the integration id and a
+reason ("env connection", "no stored credential").
 
-## The one residual race, and why it's acceptable
+## The package
 
-OpenCode's own `auth.json` writes are unlocked and non-atomic (see
-`docs/opencode-auth.md`) — there is no cooperative lock protocol for an
-external tool to join. If `opencode-swap` swaps the file at the exact moment
-OpenCode is mid-refresh-write, the two writes can interleave. `opencode-swap`
-mitigates this three ways: its own write is atomic (so *its* half of the
-race can never leave a half-written file), it detects a likely-running
-OpenCode process and prompts for confirmation before switching, and `.bak`/
-`restore` provide a recovery path if a race does land badly. It does not
-claim to eliminate the race — that would require a change on OpenCode's
-side, which is out of this project's control.
+- **Provenance.** Releases are published from GitHub Actions through npm trusted publishing
+  (OIDC, no stored token) with provenance; see [Releasing](releasing.md).
+- **What is published** is `dist/` (built from `src/` by `scripts/build.ts`), `README.md`,
+  `LICENSE` and `package.json`. `check-tui-entry-compiled.sh` refuses a payload that imports
+  `effect` or `@opencode/*` at runtime (OpenCode would refuse it), that is not precompiled, or
+  that exports anything but `./tui`.
+- **Dependencies.** At runtime the plugin uses only modules the host provides; its peers are
+  optional, so installing it installs nothing else (`V4/V5`).
+
+## Reporting
+
+See [`SECURITY.md`](../SECURITY.md).

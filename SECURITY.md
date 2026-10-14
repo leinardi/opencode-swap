@@ -1,51 +1,48 @@
 # Security Policy
 
-`opencode-swap` handles OpenCode provider credentials (access tokens, refresh
-tokens, API keys). Report vulnerabilities responsibly — see below.
+`@leinardi/opencode-swap` runs inside OpenCode's TUI with access to every credential OpenCode
+stores (access tokens, refresh tokens, API keys). Report vulnerabilities responsibly, as below.
 
 ## Supported versions
 
-Only the latest released version on PyPI is supported. Older releases do not
-receive backported fixes; upgrade before reporting.
+| Version | Supported |
+| --- | --- |
+| latest 1.x on npm (OpenCode 2) | yes |
+| 0.4.x TUI plugin on npm (OpenCode 1, `maint/0.4`) | security fixes only |
+| `opencode-swap` CLI on PyPI (0.4.7 and older) | no: retired |
+
+Upgrade to the latest release of your line before reporting.
 
 ## Reporting a vulnerability
 
 **Do not open a public GitHub issue for a security vulnerability.**
 
 Use [GitHub's private vulnerability reporting](https://github.com/leinardi/opencode-swap/security/advisories/new)
-for this repository (Security tab → "Report a vulnerability"). This opens a
-private draft advisory visible only to the maintainer until a fix is ready.
+for this repository (Security tab → "Report a vulnerability"). This opens a private draft
+advisory visible only to the maintainer until a fix is ready.
 
 If that is unavailable to you, email `roberto@leinardi.com` instead.
 
-**Never include credentials, tokens, or `auth.json` contents in a report.** If
-your report needs to show account state, sanitize it the same way
-`opencode-swap` itself does: account ids truncated to their last four
-characters, no raw token/key values, no `auth.json` attached. This mirrors the
-handling contributors are asked to follow in
-[`docs/provider-research-prompt.md`](docs/provider-research-prompt.md).
+**Never include credentials in a report**: no tokens, no API keys, no `opencode auth export`
+output, no `opencode.db`. If the report needs to show account state, sanitize it the way the
+plugin itself does: a key as its last four characters at most, no raw token or key values.
 
 Please include:
 
-- `opencode-swap --version` and OpenCode version.
-- Operating system.
-- Steps to reproduce, and the security impact you believe it has.
+- the `@leinardi/opencode-swap` version and the OpenCode version (`opencode --version`);
+- the operating system;
+- steps to reproduce, and the security impact you believe it has.
 
-You'll get an acknowledgment as soon as practical. There is no bug bounty;
-this is a personal open-source project.
+You'll get an acknowledgment as soon as practical. There is no bug bounty; this is a personal
+open-source project.
 
 ## Threat model and scope
 
-`opencode-swap` is designed to match OpenCode's own filesystem trust boundary,
-not exceed it — it explicitly does not defend against a same-UID attacker, a
-compromised kernel, or memory scraping. See
-[`docs/security.md`](docs/security.md) for the full threat model, what's in
-scope, and the deliberate design trade-offs (no custom cryptography, Linux
-uses `chmod 0600` files rather than Secret Service, and the one known residual
-race — switching accounts while OpenCode is mid-token-refresh — described in
-the [README](README.md#commands)).
+The plugin matches OpenCode's own trust boundary rather than exceeding it: it does not defend
+against a same-user attacker, root, memory scraping, OpenCode itself or another plugin, all of
+which already have the credentials. What it does guarantee, and what is out of scope, is in
+[`docs/security.md`](docs/security.md).
 
-Findings that fall inside the "explicitly out of scope" section of
-`docs/security.md` are still welcome as issues (not advisories) if you think
-the boundary itself should move, but they are treated as design discussions,
-not vulnerabilities.
+Findings in that document's "Out of scope" section are still welcome as issues (not advisories)
+if you think the boundary itself should move, but they are treated as design discussions, not
+vulnerabilities.

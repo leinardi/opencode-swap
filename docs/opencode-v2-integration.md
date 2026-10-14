@@ -3,8 +3,8 @@
 Ground truth for the OpenCode 2 work: the `migrate-to-opencode2` command of the last Python
 release and the OpenCode 2 TUI plugin. Every finding below was read from OpenCode's source or
 observed in the isolated sandbox (`scripts/oc2-sandbox.sh`), with fake credentials only. When
-OpenCode behaviour is in question, check and update this file rather than re-guessing, the way
-`docs/opencode-auth.md` serves OpenCode 1.x.
+OpenCode behaviour is in question, check and update this file rather than re-guessing. (The
+0.4.x CLI's equivalent for OpenCode 1.x, `docs/opencode-auth.md`, stays on `maint/0.4`.)
 
 Sources:
 
@@ -188,6 +188,13 @@ characters from `0-9A-Za-z` (`packages/schema/src/identifier.ts:3-31`).
   (`npm.ts:256-260`). `opencode plugin check` reported `oc2-probe-plugin 1.0.0 (update
   available)`; `opencode plugin update` installed 1.0.1 as a new generation, picked up on the next
   TUI start.
+- **The `/plugins` dialog updates server plugins only.** Its `update` action (`ctrl+u`,
+  `dialog.plugins.update`, `packages/tui/src/config/keybind.ts:281`) is shown only for an entry
+  that `outdated()` accepts, which requires `runtime === "server"` and a package source
+  (`packages/tui/src/feature-plugins/system/plugins.tsx:43,304-305`); its "check for updates"
+  action is likewise hidden unless a server package plugin is configured (`:212-221`). A TUI-only
+  plugin is updated with `opencode plugin update`, which installs TUI targets through npm
+  (`packages/cli/src/commands/handlers/plugin/update.ts:23-29`).
 - **Precompiled Solid output renders reactively.** The probe, built per file with
   `@opentui/solid`'s `transformSolidSource`, showed a footer counter that advanced every second.
 - **Raw `.tsx` from npm does not load.** A package exporting `./src/tui.tsx` failed with "Cannot
@@ -478,6 +485,13 @@ Deviations from the plan, each with its evidence above:
   afterwards (legacy-import seed, `auth export`, TUI with the probe plugin, stop) passed `check`,
   as did the 2.0.20 cycle.
 
+- **The README points updates at `opencode plugin update` only.** The plan named
+  `opencode plugin update` or `ctrl+u`; `ctrl+u` in `/plugins` never offers to update a TUI-only
+  plugin (V4/V5).
+- **The README has no screenshots.** The GIFs and PNGs in `assets/` show the 0.4.x plugin in
+  OpenCode 1's session prompt, not the OpenCode 2 footer, so the README describes the footer in
+  text. They stay in the repository until replaced.
+
 Open items for the human checklist:
 
 - **F5: `wham/usage` with `chatgpt-token-sharing` tokens** needs a real login. OpenCode 2's
@@ -494,3 +508,8 @@ Open items for the human checklist:
   restart.
 - **Real usage numbers** were not seen in the sandbox: fake tokens only ever produce `n/a`.
   Check the footer's windows and pace colours with a real OpenAI and z.ai account.
+- **New screenshots** of the OpenCode 2 footer and `/swap` picker, with real usage, to replace
+  `assets/` and go back into the README.
+- **The `maint/0.4` release flow** in `docs/releasing.md` (a hand-pushed `tui-v0.4.N` tag, the
+  `legacy` dist-tag, a release without the Latest badge) has not run yet. Check it with the
+  first 0.4.x fix, and point `legacy` at 0.4.7 once 1.0.0 is out.

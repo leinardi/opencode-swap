@@ -4,37 +4,38 @@ Guide for AI agents in this repo. Read before change anything.
 
 ## What this is
 
-`opencode-swap` = standalone Python CLI. Switches OpenCode between saved
-provider accounts — securely store each account's OpenCode credential record,
-atomic-swap into `~/.local/share/opencode/auth.json` — single file OpenCode
-reads fresh every request. NOT OpenCode plugin. NOT runtime proxy/interceptor
-(that's `opencode-balancer` project). Full rationale: `README.md` +
-`docs/architecture.md`.
+`@leinardi/opencode-swap` = OpenCode 2 TUI plugin, TypeScript on Bun, published to npm. The
+repository root is the plugin. OpenCode 2 stores multiple accounts per provider itself
+(`credential` table) and switches them natively; the plugin adds only what OpenCode lacks:
+footer with the session provider's active account + usage (ChatGPT `wham/usage`, z.ai GLM
+Coding Plan quota), `/swap` cross-provider picker, `/swap-next`, `/swap-refresh`. NOT a
+credential store. NOT runtime proxy/load balancer (that's `opencode-balancer`). Full picture:
+`README.md` + `docs/architecture.md`.
 
-Model project: `claude-swap` (same idea, Claude Code). Design choices —
-atomic writes, transaction+rollback, macOS Keychain routing w/ sticky file fallback
-— ported+adapted here. `docs/architecture.md` + `docs/security.md` note kept
-vs changed, why.
+**Maintenance line.** Up to 0.4.x this repo was a Python CLI with its own vault, for OpenCode
+1.x, plus an OpenCode 1 TUI plugin. Python CLI retired at 0.4.7 (PyPI frozen). That code lives on
+`maint/0.4`, which keeps its own `AGENTS.md`, workflows and docs: on that branch follow those,
+not this file. Fixes there are plugin-only, released by hand under npm's `legacy` dist-tag
+(`docs/releasing.md#the-04x-line`). Never merge between `main` and `maint/0.4`.
 
 ## Before touching anything
 
 Read these two first — most "obvious" changes wrong without context:
 
-1. `docs/opencode-auth.md` — docs OpenCode's `auth.json` format, refresh
-   behavior, locking (or lack). Reverse-engineered from OpenCode source, not
-   OpenCode-documented. Every assumption here re "what OpenCode does" traces
-   back to this file — if OpenCode behavior in question, check/update here,
-   don't re-guess.
-2. `docs/architecture.md` — switch algorithm, why sync-back exists, why
-   transaction/rollback only covers `auth.json` write step (not every step).
-   Re-deriving from code alone easy to get subtly wrong (see "fail-safe" note
-   below).
+1. `docs/opencode-v2-integration.md` — OpenCode 2 behavior the plugin depends on, from source
+   (file:line) and sandbox runs: credential API and events, plugin loading/packaging, slots,
+   keymap modes, provider→integration mapping, env connections, version minimum. Every
+   assumption here re "what OpenCode does" traces back to this file — if OpenCode behavior in
+   question, check/update there, don't re-guess. Its "Deviations and open items" lists what is
+   still unverified.
+2. `docs/architecture.md` — module map, request ownership, revision tracker, cache/back-off
+   timing, why `activate` is the only write. Re-deriving from code alone easy to get subtly
+   wrong (e.g. 55 s cache vs 60 s poll).
 
 ## Core invariants — do not violate
 
-These govern the OpenCode 2 TUI plugin, which is the repository root. The Python CLI is
-frozen at 0.4.x and leaves the repo; until then its own rules stay in `docs/architecture.md` and
-`docs/security.md`. OpenCode 2 behavior cited here is in `docs/opencode-v2-integration.md`.
+These govern the plugin. OpenCode 2 behavior cited here is in
+`docs/opencode-v2-integration.md`; the 0.4.x CLI's own invariants stay with it on `maint/0.4`.
 
 - **No secrets in UI, logs, errors or storage.** Credential values (access and refresh tokens,
   API keys) never reach exposed state, toasts, dialog text, the footer, thrown messages or any
@@ -73,47 +74,45 @@ frozen at 0.4.x and leaves the repo; until then its own rules stay in `docs/arch
 
 ## Testing rules
 
-- **Never let test touch real macOS Keychain.** Construct
-  `Switcher`/`SecretStore` w/ `platform=Platform.UNKNOWN` (routes straight
-  to file backend) or monkeypatch specific backend functions
-  (`macos_keychain.*`) w/ in-memory fake. `tests/test_cli.py`'s
-  `isolated_env` autouse fixture does this for all CLI tests — reuse
-  pattern, don't bypass.
-- **Never let test touch real `~/.local/share/opencode/auth.json`.** Point
-  `Switcher(opencode_auth_path=...)` at `tmp_path`, or (CLI tests) set
-  `XDG_DATA_HOME` to `tmp_path` via `monkeypatch.setenv`.
-- Account names lowercased by `normalize_account_name` — using `"A"`/`"B"`
-  as test account names while looking up via `"openai:A"` = bug that bit
-  codebase before (fixed, easy reintroduce). Use lowercase names in tests.
-- Failure-injection tests should target one specific write call, not
-  monkeypatch something broad like `json.dumps` globally — multi call sites
-  (`.bak` write, `auth.json` write, registry write) share same helper
-  (`atomic.atomic_write_json`), global patch fails *first* one encountered,
-  not necessarily one meant to test. See `test_switcher_use.py`'s
-  failure-injection tests for pattern (patch specific module attribute, or
-  filter by path in wrapper).
-- Verify every codebase change w/ `make check`. Runs linters+tests; no
-  network access, prompts, real keychain/auth files. If needs them, test
-  isolation regressed.
+- **Never start OpenCode or touch its real dirs from a test.** `bun test` runs with no
+  OpenCode, no network, no credentials. Real-OpenCode checks go through
+  `scripts/oc2-sandbox.sh` only (isolated `HOME`/`XDG_*`, cleared env, `check` proves real
+  dirs untouched) — never the real `opencode` binary, never `~/.local/share|.config|.cache|
+  .local/state/opencode*`.
+- **Inject fakes, don't patch globals.** `AccountStore` takes every dependency via `StateDeps`
+  (client, events, `fetchImpl`, `now`, timers, select/confirm/toast, `sessionStatus`). Tests
+  pass fakes: `ManualTimers` in `test/state.test.ts`, `fakeFetch`/`hangingFetch` and friends in
+  `test/helpers.ts`, deferred promises for out-of-order answers. `test/plugin.test.ts` runs
+  `setup` against a recording context. Reuse these; don't monkeypatch `globalThis.fetch` or
+  real timers.
+- **Orchestration tests drive the race.** A change to `src/state.ts` needs a test for the
+  interleaving it is about: result after switch/update/dispose, event mid-request, deadline,
+  revision change with no event. Assert exposed state, not that a mock was called.
+- **Fake credentials only.** `makeJwt` (unsigned JWT-shaped tokens, made-up claims) and obvious
+  dummy keys. Leak tests plant these and grep exposed state, `JSON.stringify` of it, toasts,
+  dialog options and error messages. Anything touching a credential value needs one.
+- Verify every change w/ `make check`, plus the matrix row below. If a check needs network,
+  real OpenCode or real credentials, test isolation regressed.
 
 ## Project conventions
 
 - **Direct pushes to `main` are rejected.** The repo is public with branch
   protection: every change goes through a branch + PR, gated on the required
   CI checks. See `CONTRIBUTING.md`.
-- Python 3.12+, stdlib `argparse` (no Click/Typer), dataclasses over
-  ad-hoc dicts, `from __future__ import annotations` everywhere.
-- `uv` for dependency mgmt (`uv sync --dev`, `uv run pytest`, `uv run
-  opencode-swap ...`).
-- Comments explain *why*, not *what* — esp citing specific OpenCode source
-  behavior or specific incident (bug found during manual verification,
-  claude-swap precedent) justifying non-obvious choice. Can't cite reason →
-  comment probably shouldn't exist.
-- Keep `Provider` protocol (`providers/base.py`) limited to behavior required
-  by implemented providers. Static API providers use generic handling; OAuth
-  requires provider-specific evidence for identity, refresh, and expiry.
-- See `docs/architecture.md` for module responsibility map before adding
-  new file — most new code belongs in existing module.
+- TypeScript, ES modules, Bun 1.3.14. `import type` for types (ESLint
+  `consistent-type-imports`); runtime imports only of what the host provides or what ships in
+  `dist/`.
+- Pure logic in its own module (`accounts`, `session`, `bands`); `usage/*` performs one
+  request and parses it. Everything that schedules or owns async work — timers, events, request
+  lifetimes, dialogs — lives in `src/state.ts`.
+- Comments explain *why*, not *what* — esp citing OpenCode source (file:line), a
+  `docs/opencode-v2-integration.md` finding (`V7`, `F5`…) or a specific incident justifying a
+  non-obvious choice. Can't cite reason → comment probably shouldn't exist.
+- New OpenCode API use = new member in `src/features.ts` `missingFeatures`, checked against the
+  2.0.20 types; a newer member raises the minimum version (README, `engines`, `features.ts`,
+  integration doc).
+- See `docs/architecture.md` for module map before adding new file — most new code belongs in
+  existing module.
 
 ## Commit messages
 
@@ -123,8 +122,8 @@ Enforced by the `conventional-pre-commit` `commit-msg` hook (`--force-scope`,
 installed by `make pre-commit-install`) and by the `conventional-commits` CI
 job. Types: `feat`, `fix`, `docs`, `test`, `refactor`, `perf`, `build`, `ci`,
 `chore`, `style`, `revert`. Breaking changes use `!` before `:` or a
-`BREAKING CHANGE:` footer. Example: `fix(auth): keep the rotated refresh
-token on a self-switch`.
+`BREAKING CHANGE:` footer. Example: `fix(usage): keep the back-off when a
+poll returns the same token`.
 
 A release with no explicit version is derived by commitizen (`cz bump
 --get-next` in `release.yaml`) from the commits since the last `v<version>`
@@ -132,9 +131,9 @@ tag, so a wrong type ships a wrong version:
 
 | Release | Commit | Example |
 | --- | --- | --- |
-| major | any type with `!` before the colon, or a `BREAKING CHANGE:` footer (also from 0.x) | `feat(cli)!: rename the export command` |
-| minor | `feat` | `feat(providers): add the xai OAuth record` |
-| patch | `fix`, `perf`, `refactor` | `fix(auth): keep the rotated refresh token` |
+| major | any type with `!` before the colon, or a `BREAKING CHANGE:` footer | `feat(tui-plugin)!: require OpenCode 2.1` |
+| minor | `feat` | `feat(usage): add the xai usage lookup` |
+| patch | `fix`, `perf`, `refactor` | `fix(footer): keep the label when usage is pending` |
 | none | `build`, `chore`, `ci`, `docs`, `revert`, `style`, `test` | `ci(ci): add the ci-result job` |
 
 The highest bump among the commits wins; with only "none" commits since the
@@ -142,7 +141,8 @@ last tag, a release with no version fails with "nothing to bump". Bump table
 and details: `CONTRIBUTING.md#versioning`.
 
 **Pick the type by whether the change should ship, not by what kind of change
-it is.** What ships is the TUI plugin on npm. A change
+it is.** What ships is the plugin on npm: `src/**`, `scripts/build.ts`, and
+`package.json`'s runtime fields (`exports`, `files`, `engines`, peers). A change
 users should receive is `fix` (or `feat`). `perf` and `refactor` bump a patch
 under commitizen, so never use them for a change that ships nothing (CI,
 docs, tests, tooling): type that `ci`, `docs`, `test`, `build` or `chore`. A
@@ -190,7 +190,7 @@ and the repo-local `.mk` fragments carry the MIT header, with the year of the
 file's first commit; a shebang stays on the first line. Copy it from an
 existing file of the same kind, or use the IntelliJ copyright profile in
 `.idea/copyright/`. `scripts/check-license-headers.sh` (an always-run
-pre-commit hook, tested by the TUI plugin's `test/license-headers.test.ts`) fails on any that
+pre-commit hook, tested by `test/license-headers.test.ts`) fails on any that
 lacks it. The make-common files above are exempt: they carry make-common's
 own header. YAML, JSON, TOML and Markdown are not governed.
 
@@ -202,12 +202,12 @@ to merge").
 
 ## Full documentation index
 
-- `README.md` — user-facing overview, install, commands, quickstart.
-- `docs/architecture.md` — module map, switch algorithm, transaction design.
-- `docs/opencode-auth.md` — OpenCode's `auth.json` format/lifecycle (ground truth).
-- `docs/security.md` — threat model, storage backend comparison.
-- `docs/testing.md` — testing strategy in depth.
-- `docs/roadmap.md` — milestone status (what's built, what's postponed).
-- `docs/releasing.md` — how to cut a release (CLI on PyPI and TUI plugin on npm, in lockstep).
+- `README.md` — user-facing overview, install, commands, options, network access, migration.
+- `docs/opencode-v2-integration.md` — OpenCode 2 behavior (ground truth), deviations, open items.
+- `docs/architecture.md` — module map, data flow, request ownership, packaging.
+- `docs/security.md` — threat model, credential handling, network calls.
+- `docs/provider-support.md` — what each provider/credential type shows; usage endpoints.
+- `docs/testing.md` — test strategy, injected fakes, OpenCode sandbox.
+- `docs/releasing.md` — cutting a release (npm), dist-tags, the `maint/0.4` line.
 - `CONTRIBUTING.md` — human contributor workflow (PR checklist, testing rules).
 - `SECURITY.md` — vulnerability reporting process.

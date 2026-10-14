@@ -1,113 +1,105 @@
 # Testing
 
 ```bash
-make python-sync
-make python-test
+make plugin-test      # bun test ./test
+make verify           # everything CI's verify job runs
 ```
 
-The equivalent direct command is `uv run pytest -q`.
+The unit suite runs in a few seconds with no network, no OpenCode and no credentials. Nothing
+in `test/` may start OpenCode, read OpenCode's directories or reach a real endpoint; a test
+that needs any of them is a broken test.
 
-Automated suite runs in a few seconds. No network access, no real macOS
-Keychain access, and no access to your real
-`~/.local/share/opencode/auth.json` is required or performed by the suite.
+## Injected fakes
 
-## Isolation
+`AccountStore` (`src/state.ts`) takes every dependency as an argument (`StateDeps`): the
+credential client, the event source, `fetchImpl`, the clock, the timers, the dialogs, the toast
+and the session status. Tests pass fakes for all of them, so orchestration is tested without a
+TUI, without real time and without a network.
 
-Two things must never happen in a test, and the fixtures exist specifically
-to prevent them:
+- **Time** is `ManualTimers` in `test/state.test.ts`: intervals and timeouts fire only when a
+  test advances them, so the 60 s poll, the 55 s cache and the 5 s deadlines are tested exactly.
+- **HTTP** is `fakeFetch`, `jsonResponse`, `textResponse` and `hangingFetch` from
+  `test/helpers.ts`. `fakeFetch` records every call, so a test asserts what was sent, to which
+  URL, and that nothing was sent when nothing should be.
+- **Promises** a test needs to settle out of order (a list or a usage request answering after a
+  switch) are deferred promises the test resolves itself.
+- **Credentials** are fakes: `makeJwt` builds unsigned JWT-shaped tokens with made-up claims,
+  and keys are obvious dummies. Tests plant these values and assert they never appear in exposed
+  state, `JSON.stringify` of it, toasts, dialog options or error messages.
 
-- **Touching the real macOS Keychain.** `Switcher`/`SecretStore` accept
-  a `platform` override; passing `platform=Platform.UNKNOWN` routes straight
-  to the file backend. CLI tests use an autouse fixture
-  (`tests/test_cli.py::isolated_env`) that monkeypatches
-  `Platform.detect` for the same effect, so every `cli.main(...)` call in
-  the suite is isolated by default.
-- **Touching the real `auth.json`.** Non-CLI tests construct `Switcher`
-  with `opencode_auth_path` pointed at a `tmp_path`. CLI tests set
-  `XDG_DATA_HOME` to a `tmp_path` via `monkeypatch.setenv`, which
-  `paths.py` honors the same way it would honor a real environment
-  variable.
+`test/plugin.test.ts` runs `setup` against a recording context: every slot, layer, toast and
+call is captured, so feature detection, the provider chain and the command layer are tested as
+OpenCode would call them.
 
-If a new test needs either of these and doesn't go through the existing
-patterns, that's a bug in the test, not a reason to add a new pattern.
+## What's covered
 
-## What's covered, by category
+- **Usage lookups** (`usage-openai`, `usage-zai`, `usage-http`): response parsing, ported from
+  the 0.4.x CLI's tests; every failure as fixed text; timeouts and aborts; redirects refused; and
+  leak tests: a planted token never in a message, including thrown header errors and echoed
+  response bodies.
+- **Projection** (`accounts`): `AccountView` carries no secret, unknown shapes become
+  `kind: "unknown"`, malformed envelopes are left out, sort order, next-account wrap-around,
+  usage eligibility, integration resolution and the footer account (env connections).
+- **Orchestration** (`state`):
+  - late results after a switch, after an update event and after dispose are never applied;
+  - the cache: hits for an unchanged value, its 55 s freshness, invalidation by events and
+    `/swap-refresh`;
+  - a value replaced with no event (a z.ai key, an OAuth access token with the same
+    `expires`) bumps the revision on the next poll, lifts the back-off and is fetched afresh;
+  - the 401/403 back-off and its lifting;
+  - the picker's 4-request limit, its 5 s deadline and per-request aborts;
+  - a cancelled select or confirm never activates; a rejected `activate` keeps the previous
+    active account;
+  - dispose clears the interval, the subscriptions and pending requests.
+- **Plugin** (`plugin`): feature detection, the provider chain (session model, messages, prompt
+  model), env connections, the command layer and `setup`'s registration and teardown.
+- **Presentation** (`bands`, `options`, `jwt`): window labels, pace bands and reset times;
+  option parsing; JWT claim decoding.
+- **License headers** (`license-headers`): `scripts/check-license-headers.sh` passes on a
+  tree where every file has its header and fails on a file without one.
 
-**Unit** — path resolution (`XDG_DATA_HOME`, `OPENCODE_TEST_HOME`
-awareness), JWT claim decoding and its fallback chains, provider
-extract/splice/identity/describe/validate for OpenAI and supported provider
-types, generic API metadata validation, guarded OAuth identity behavior, atomic write primitives
-(including permission bits and no-leftover-temp-file assertions), the
-account-name normalization rules, `FileLock` acquire/release/timeout,
-`SecretStore` backend routing (including Linux private-file permissions and
-macOS fallback reconciliation), and `Registry` CRUD.
+## Packaging checks
 
-**Integration** — the full `add` → `add` (second account) → `use` → `use` →
-`use` round trip, asserting the *exact* resulting `auth.json` content at
-each step, byte-for-byte against what's in the secret store. A dedicated
-rotation test simulates OpenCode refreshing a token while an account is
-live, then asserts the next switch-away captures the rotated (not stale)
-refresh token, and a later reactivation of that account carries the
-captured version. Multi-provider tests verify duplicate names across providers,
-independent active hints, unrelated-provider preservation, whole-file restore
-reconciliation, and registry v1 migration. This is the test for the R1 risk described in
-`docs/architecture.md`.
+`make verify` also packs the plugin and checks the tarball, the way OpenCode will see it:
 
-**Failure injection** — for `use_account`, a failure is injected at each of:
-before the `.bak` write, during the sync-back secret-store write, during
-`auth.json`'s own temp-file write, immediately before the atomic rename, and
-after the rename succeeds (forcing the registry write to fail, which
-exercises the rollback path). Each asserts the live `auth.json` is either
-completely untouched or correctly rolled back, and that no temp files are
-left behind.
+- `make plugin-entry-check` (`scripts/check-tui-entry-compiled.sh`): exports exactly `./tui`,
+  every file precompiled `.js`, no generic JSX runtime, no runtime `effect` or `@opencode/*`
+  import, relative imports with `.js`, and an entry whose default export is `{id, setup}`.
+- `make plugin-npm-resolve-check` (`scripts/check-npm-resolution.sh`): OpenCode's Arborist
+  version resolves the tarball's peers from a clean project.
 
-**Concurrency** — `tests/test_locking.py` proves real mutual exclusion under
-five-thread contention on the same lock file (never more than one holder at
-a time — this exercises the actual `flock()` kernel primitive, which is
-per-open-file-description regardless of whether the contenders are threads
-or processes). `tests/test_concurrency.py` races two, then ten, independent
-`Switcher` instances against `use_account` at the same time and asserts the
-final `auth.json` is always valid, complete JSON matching exactly one
-account — never corrupted, truncated, or a blend of two writes.
+A change to either script must be checked by breaking what it guards once and seeing it fail.
+[`opencode-v2-integration.md`](opencode-v2-integration.md) records the breaks used so far.
 
-**Compatibility** — malformed/unrecognized provider records raise
-`SchemaError` from `add_account`, `use_account`, and `current()` alike, with
-no partial side effects (no registry entry created, no secret stored, live
-`auth.json` untouched). This category caught a real bug during development:
-`current()` was catching the generic `OpenCodeSwapError` base class, which
-also (silently) caught `SchemaError` since it's a subclass — masking a real
-schema incompatibility as "no active account." Fixed and regression-tested;
-see `AGENTS.md` for the general lesson (watch for exception handling that's
-broader than intended).
+## The OpenCode sandbox
 
-**Security** — every secret/backup/registry/temp file created during tests
-is asserted to be `0600` (dirs `0700`); a planted secret value is asserted
-to never appear in captured CLI stdout/stderr across `add`/`list`
-(the two commands that display account data); the macOS Keychain wrapper's
-secret-passing-via-stdin behavior is exercised through mocked
-`subprocess.run` calls rather than a real Keychain.
+Behaviour that needs a real OpenCode (loading, rendering, slash commands, events) is checked by
+hand in an isolated install, never in your own:
 
-## Live verification (not part of the automated suite)
+```bash
+make sandbox                                  # OpenCode 2 in /tmp/oc2 (OC_SANDBOX_VERSION=2.0.x)
+make sandbox-v1                               # OpenCode 1.19 in /tmp/oc1
+scripts/oc2-sandbox.sh run auth list          # any OpenCode command, sandboxed
+scripts/oc2-sandbox.sh tui                    # the TUI in a detached tmux session
+scripts/oc2-sandbox.sh capture                # print the TUI's screen
+scripts/oc2-sandbox.sh keys '/swap' Enter     # type into it
+scripts/oc2-sandbox.sh stop                   # stop the TUI and OpenCode's background service
+scripts/oc2-sandbox.sh check                  # fail if a real OpenCode directory changed
+```
 
-OpenAI milestones were additionally verified against a real OpenCode
-installation and real account during development — a real self-switch
-(`use_account` on the already-active account, provably a no-op), a real
-`add_account` against a live OAuth token, and a real synthetic-account swap
-that triggered an actual OpenCode request and observed it use the swapped
-(fake) credential. These aren't automated (they require a live OpenCode
-install and, for the multi-account case, two real ChatGPT accounts) but are
-what caught both permission bugs described below — worth repeating manually
-after any change to `switcher.py`, `store.py`, or `atomic.py`.
+The script runs OpenCode with a cleared environment and `HOME`, `XDG_*` and `TMPDIR` inside the
+sandbox, so no real configuration, credential or provider key is seen; its header explains
+each command. Use fake credentials only (`opencode auth import --standalone` of JWT-shaped
+fakes), and run `check` at the end.
 
-OpenAI remains the only end-to-end live-tested provider. Non-OpenAI provider
-coverage is source-derived and synthetic because maintainer lacks those
-accounts. Live testers are explicitly wanted; see `docs/provider-support.md`.
+To load a build of the plugin, publish it to a local registry and point the sandbox at it:
+`npx verdaccio` in a scratch directory, `npm publish --registry http://127.0.0.1:4873/` of a
+prerelease version, `OC_SANDBOX_REGISTRY=http://127.0.0.1:4873/`, then list the package in the
+sandbox's `cli.json` `"plugins"`. The end-to-end runs recorded in
+[`opencode-v2-integration.md`](opencode-v2-integration.md#plugin-end-to-end) used exactly this.
 
-Two real bugs were found this way, not by the automated suite alone, and
-both are now covered by regression tests: the `opencode-swap` data
-directory and its `backups/` subdirectory were initially created at
-whatever the process umask left them at (`775` in the environment they were
-found in) instead of the required `0700` — files inside were correctly
-`0600` throughout, but the directories themselves were listable by other
-users in the same group. Both are now explicitly `chmod`'d and both have
-dedicated permission-assertion tests.
+## Live verification
+
+Real accounts are not part of any automated check. What still needs one is listed under
+"Deviations and open items" in [`opencode-v2-integration.md`](opencode-v2-integration.md),
+starting with real usage numbers for ChatGPT and z.ai accounts.

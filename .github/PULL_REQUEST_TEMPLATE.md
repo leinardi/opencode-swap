@@ -11,7 +11,7 @@ Any HTML comment will be stripped when the markdown is rendered, so you don't ne
 
 ## Pull request checklist
 
-- [ ] I am targeting the `main` branch
+- [ ] I am targeting the `main` branch (or `maint/0.4` for a fix to the OpenCode 1 plugin)
 - [ ] I have **rebased** this branch on top of the destination branch
 - [ ] I have executed `make check` locally *before creating the commit* and it has run successfully
 - [ ] I have run `make verify` locally and it has passed
