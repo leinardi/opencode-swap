@@ -19,7 +19,9 @@
         "typescript-eslint": "8.70.1",
       },
       "peerDependencies": {
-        "@opencode-ai/plugin": "1.18.x",
+        "@opencode-ai/plugin": "^1.18.0",
+        "@opentui/core": "0.5.x",
+        "@opentui/keymap": "0.5.x",
         "@opentui/solid": "0.5.x",
         "solid-js": "1.9.x",
       },
