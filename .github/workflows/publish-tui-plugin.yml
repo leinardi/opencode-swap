@@ -66,10 +66,32 @@ jobs:
           else
             echo "published=false" >> "$GITHUB_OUTPUT"
           fi
+      # npm moves `latest` to whatever is published without --tag. Once 1.x
+      # (OpenCode 2) is out, a 0.4.x maintenance release (OpenCode 1) must not
+      # take `latest` back: `opencode plugin add` and OpenCode 1's bare-name
+      # resolution both install `latest`.
+      - name: Choose npm dist-tag
+        id: disttag
+        if: steps.registry.outputs.published != 'true'
+        env:
+          PACKAGE_VERSION: ${{ steps.package.outputs.version }}
+        run: |
+          # No fallback on failure: guessing `latest` here could hand it to an
+          # older line. The package exists, so the lookup must succeed.
+          LATEST=$(npm view @leinardi/opencode-swap dist-tags.latest)
+          TAG=latest
+          if [ -n "$LATEST" ] && [ "$LATEST" != "$PACKAGE_VERSION" ] \
+            && [ "$(printf '%s\n%s\n' "$PACKAGE_VERSION" "$LATEST" | sort -V | head -n1)" = "$PACKAGE_VERSION" ]; then
+            TAG=legacy
+          fi
+          echo "Publishing $PACKAGE_VERSION with dist-tag $TAG (current latest: ${LATEST:-none})"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
       - name: Publish with npm provenance
         if: steps.registry.outputs.published != 'true'
         working-directory: integrations/opencode-tui-plugin
-        run: npm publish --access public --provenance --ignore-scripts
+        env:
+          DIST_TAG: ${{ steps.disttag.outputs.tag }}
+        run: npm publish --access public --provenance --ignore-scripts --tag "$DIST_TAG"
       - name: Create GitHub release
         if: github.ref_type == 'tag'
         env:

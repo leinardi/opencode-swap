@@ -111,15 +111,28 @@ def _legacy_filename(key: str) -> str:
 
 
 class SecretStore:
-    """String key-value secret store. Keys are opaque; callers own their format."""
+    """String key-value secret store. Keys are opaque; callers own their format.
 
-    def __init__(self, secrets_dir: Path, platform: Platform | None = None):
+    `read_only=True` never changes disk or Keychain state: put/delete/upgrade
+    raise, and a read that would otherwise garbage-collect an orphaned sealed
+    file refuses instead (see `_get_sealed`)."""
+
+    def __init__(self, secrets_dir: Path, platform: Platform | None = None, *, read_only: bool = False):
         self._dir = secrets_dir
+        self._read_only = read_only
         self._platform = platform or Platform.detect()
         self._use_file_backend = self._platform is not Platform.MACOS
         self._backend_errors: tuple[type[BaseException], ...] = ()
         if self._platform is Platform.MACOS:
             self._backend_errors = macos_keychain.KEYCHAIN_ERRORS
+
+    @property
+    def read_only(self) -> bool:
+        return self._read_only
+
+    def _refuse_write(self) -> None:
+        if self._read_only:
+            raise SecretStoreError("secret store is open read-only; refusing to change it")
 
     @property
     def backend_name(self) -> str:
@@ -228,7 +241,11 @@ class SecretStore:
         if data_key_hex is None:
             # Orphaned: the file survived a crash but its data key never
             # committed, or the key was deleted independently. Unreadable
-            # either way -- GC it and let an older-format fallback win.
+            # either way -- GC it and let an older-format fallback win. A
+            # read-only reader may neither delete it nor silently skip it:
+            # an older fallback could be staler than the record it shadows.
+            if self._read_only:
+                raise SecretStoreError(f"stored credential for {key} is an orphaned sealed file with no Keychain data key")
             with suppress(OSError):
                 self._sealed_file_path(key).unlink(missing_ok=True)
             return None
@@ -303,6 +320,7 @@ class SecretStore:
             raise SecretStoreError("could not confirm credential absence from OS credential store") from exc
 
     def put(self, key: str, value: str) -> None:
+        self._refuse_write()
         # _use_file_backend starts False only on macOS (see __init__), so
         # this branch is always the sealed envelope path -- there is no
         # other OS-backend implementation to route to.
@@ -315,6 +333,7 @@ class SecretStore:
         self._put_file(key, value)
 
     def delete(self, key: str) -> None:
+        self._refuse_write()
         if not self._use_file_backend:
             try:
                 self._delete_os(key)
@@ -341,6 +360,7 @@ class SecretStore:
         serializes concurrent access to `key` (Switcher.lock) -- running
         this for the same key from two processes at once could interleave
         two different data keys with the wrong ciphertext file."""
+        self._refuse_write()
         if self._platform is not Platform.MACOS or self._use_file_backend or self._sealed_file_path(key).exists():
             return
         value = self.get(key)
@@ -367,11 +387,50 @@ class SecretStore:
         return RecordLocation.MISSING
 
 
-class Registry:
-    """registry.json: non-secret account metadata."""
+def convert_v1(data: JsonObject, path: Path) -> JsonObject:
+    """Convert a registry v1 document to v2 in memory, without touching disk.
 
-    def __init__(self, path: Path):
+    Shared by `Registry.migrate` (which then publishes the result) and a
+    read-only `Registry` (which only ever reads it); `path` only names the
+    file in error messages."""
+    if data.get("version") != 1 or set(data) != {"version", "active", "accounts"}:
+        raise RegistryError(f"{path} has an unsupported registry version")
+    old_accounts = data.get("accounts")
+    old_active = data.get("active")
+    if not isinstance(old_accounts, dict) or (old_active is not None and not isinstance(old_active, str)):
+        raise RegistryError(f"{path} does not look like a valid opencode-swap registry")
+
+    nested: JsonObject = {}
+    active: JsonObject = {}
+    for name, raw_meta in old_accounts.items():
+        if not isinstance(name, str):
+            raise RegistryError(f"{path} has an invalid account name")
+        meta = AccountMeta.from_dict(name, raw_meta)
+        try:
+            normalize_provider_id(meta.provider)
+        except ValueError as exc:
+            raise RegistryError(f"{path} has an invalid provider id") from exc
+        provider_accounts = nested.setdefault(meta.provider, {})
+        assert isinstance(provider_accounts, dict)
+        provider_accounts[name] = meta.to_dict()
+        if old_active == name:
+            active[meta.provider] = name
+    if old_active is not None and not active:
+        raise RegistryError(f"{path} has an invalid active account")
+    return {"version": REGISTRY_VERSION, "active": active, "accounts": nested}
+
+
+class Registry:
+    """registry.json: non-secret account metadata.
+
+    `read_only=True` never writes: a v1 registry is converted in memory on
+    every read instead of migrated, and every write raises RegistryError.
+    `migrate-to-opencode2` reads the vault this way, so moving to OpenCode 2
+    leaves a vault that 0.4.x can still use byte-for-byte unchanged."""
+
+    def __init__(self, path: Path, *, read_only: bool = False):
         self._path = path
+        self._read_only = read_only
 
     @staticmethod
     def _verify_existing_v1_backup(path: Path, data: JsonObject) -> None:
@@ -388,42 +447,20 @@ class Registry:
 
     def migrate(self) -> bool:
         """Atomically migrate registry v1; secret-store keys already use provider scope."""
+        if self._read_only:
+            raise RegistryError("registry is open read-only; refusing to migrate it")
         if not self._path.exists():
             return False
         data = self._read_json()
         if data.get("version") == REGISTRY_VERSION:
             return False
-        if data.get("version") != 1 or set(data) != {"version", "active", "accounts"}:
-            raise RegistryError(f"{self._path} has an unsupported registry version")
-        old_accounts = data.get("accounts")
-        old_active = data.get("active")
-        if not isinstance(old_accounts, dict) or (old_active is not None and not isinstance(old_active, str)):
-            raise RegistryError(f"{self._path} does not look like a valid opencode-swap registry")
-
-        nested: JsonObject = {}
-        active: JsonObject = {}
-        for name, raw_meta in old_accounts.items():
-            if not isinstance(name, str):
-                raise RegistryError(f"{self._path} has an invalid account name")
-            meta = AccountMeta.from_dict(name, raw_meta)
-            try:
-                normalize_provider_id(meta.provider)
-            except ValueError as exc:
-                raise RegistryError(f"{self._path} has an invalid provider id") from exc
-            provider_accounts = nested.setdefault(meta.provider, {})
-            assert isinstance(provider_accounts, dict)
-            provider_accounts[name] = meta.to_dict()
-            if old_active == name:
-                active[meta.provider] = name
-        if old_active is not None and not active:
-            raise RegistryError(f"{self._path} has an invalid active account")
-
+        converted = convert_v1(data, self._path)
         backup_path = self._path.with_name(REGISTRY_V1_BACKUP)
         try:
             atomic_write_json_exclusive(backup_path, data)
         except FileExistsError:
             self._verify_existing_v1_backup(backup_path, data)
-        self._save({"version": REGISTRY_VERSION, "active": active, "accounts": nested})
+        self._save(converted)
         return True
 
     def _read_json(self) -> JsonObject:
@@ -439,6 +476,8 @@ class Registry:
         if not self._path.exists():
             return {"version": REGISTRY_VERSION, "active": {}, "accounts": {}}
         data = self._read_json()
+        if self._read_only and data.get("version") == 1:
+            data = convert_v1(data, self._path)
         if not isinstance(data, dict) or set(data) != {"version", "active", "accounts"}:
             raise RegistryError(f"{self._path} does not look like a valid opencode-swap registry")
         if type(data["version"]) is not int or data["version"] != REGISTRY_VERSION:
@@ -466,6 +505,8 @@ class Registry:
         return data
 
     def _save(self, data: JsonObject) -> None:
+        if self._read_only:
+            raise RegistryError("registry is open read-only; refusing to write it")
         atomic_write_json(self._path, data)
 
     def scoped_accounts(self, provider_id: str | None = None) -> dict[AccountKey, AccountMeta]:

@@ -80,3 +80,8 @@ class RefreshError(OpenCodeSwapError):
     genuinely unusable until the owner re-authenticates with OpenCode
     (`opencode auth login`) and re-adds it (`opencode-swap add`).
     """
+
+
+class MigrationError(OpenCodeSwapError):
+    """`migrate-to-opencode2` refused: the destination is not a usable
+    OpenCode 2, or emitting the accounts could lose or shadow one."""

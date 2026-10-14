@@ -79,6 +79,29 @@ def xdg_data_home() -> Path:
     return effective_home() / ".local" / "share"
 
 
+def xdg_config_home() -> Path:
+    """Return XDG_CONFIG_HOME, falling back to ``<home>/.config``, with the
+    same rules as :func:`xdg_data_home`."""
+    env = os.environ.get("XDG_CONFIG_HOME", "")
+    if env:
+        candidate = Path(os.path.expanduser(env))
+        if candidate.is_absolute():
+            return candidate
+    return effective_home() / ".config"
+
+
+def get_opencode_config_dirs() -> list[Path]:
+    """Return the directories OpenCode reads its global config from:
+    ``$XDG_CONFIG_HOME/opencode``, and ``OPENCODE_CONFIG_DIR`` when set."""
+    dirs = [xdg_config_home() / OPENCODE_DIRNAME]
+    override = os.environ.get("OPENCODE_CONFIG_DIR", "")
+    if override:
+        candidate = Path(os.path.expanduser(override))
+        if candidate not in dirs:
+            dirs.append(candidate)
+    return dirs
+
+
 def get_opencode_data_dir() -> Path:
     """Return OpenCode's data directory (``$XDG_DATA_HOME/opencode``)."""
     return xdg_data_home() / OPENCODE_DIRNAME
