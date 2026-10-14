@@ -172,7 +172,7 @@ Run before considering an edit done. `make check` applies to every row.
 | --- | --- |
 | `src/**/*.py`, `tests/**` | `uv run pytest -q` |
 | `pyproject.toml`, `uv.lock` | `uv run pytest -q`, then `make python-build` |
-| `integrations/opencode-tui-plugin/**` | `make tui-plugin-typecheck tui-plugin-lint tui-plugin-package-check tui-plugin-entry-check tui-plugin-npm-resolve-check` |
+| `integrations/opencode-tui-plugin/**` | `make tui-plugin-typecheck tui-plugin-lint tui-plugin-test tui-plugin-package-check tui-plugin-entry-check tui-plugin-npm-resolve-check` |
 | `scripts/check-npm-resolution.sh`, `scripts/check-tui-entry-compiled.sh` | `make tui-plugin-npm-resolve-check tui-plugin-entry-check`; break what each guards once and see it fail |
 | `scripts/check-license-headers.sh`, `tests/test_license_headers.py` | `uv run pytest -q tests/test_license_headers.py`; strip a header once and see the check fail |
 | `.github/workflows/**` | `pre-commit run actionlint --all-files`; release workflows: `docs/releasing.md` |

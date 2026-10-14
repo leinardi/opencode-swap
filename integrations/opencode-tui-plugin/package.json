@@ -23,10 +23,11 @@
   "scripts": {
     "build": "bun scripts/build.ts",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint src --max-warnings 0",
-    "lint:fix": "eslint src --fix --max-warnings 0",
+    "test": "bun test ./test",
+    "lint": "eslint src test --max-warnings 0",
+    "lint:fix": "eslint src test --fix --max-warnings 0",
     "pack:check": "npm pack --dry-run --ignore-scripts",
-    "check": "bun run typecheck && bun run lint && bun run pack:check",
+    "check": "bun run typecheck && bun run lint && bun run test && bun run pack:check",
     "prepublishOnly": "bun run build && bun run check"
   },
   "files": [

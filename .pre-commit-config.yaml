@@ -141,7 +141,7 @@ repos:
         entry: make tui-plugin-lint
         language: system
         pass_filenames: false
-        files: ^integrations/opencode-tui-plugin/(src/.*\.tsx?|eslint\.config\.ts|package\.json|bun\.lock)$
+        files: ^integrations/opencode-tui-plugin/((src|test)/.*\.tsx?|eslint\.config\.ts|package\.json|bun\.lock)$
   - repo: https://github.com/adrienverge/yamllint
     rev: v1.38.0
     hooks:

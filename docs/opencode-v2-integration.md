@@ -382,6 +382,18 @@ Deviations from the plan, each with its evidence above:
   plan says only `keymap.layer`.
 - **`credential.updated` has no payload** (V7), so "switch/update events for that integration"
   in the plan's cache rules cannot be scoped: an update event invalidates every integration.
+- **`src/bands.ts` is a copy until the rewrite.** The plan moves the band logic out of
+  `src/tui.tsx`. The 0.4.x build compiles `src/tui.tsx` alone into `dist/tui.js`
+  (`scripts/build.ts`), so an import of `./bands` from it would ship a broken package. The
+  TypeScript ports therefore leave `src/tui.tsx` untouched, and the old copy goes with the
+  rewrite's per-file build.
+- **The TypeScript usage lookups differ from `usage.py` in three ways.**
+  - Every failure message is fixed text. `usage.py` printed a network error's own message, which
+    the plugin never does.
+  - Redirects are not followed, so a credential only ever goes to the two usage endpoints; a
+    redirect reports its HTTP status.
+  - `JSON.parse` rejects the `NaN`/`Infinity` literals Python's `json` accepts, so such a body is
+    invalid JSON rather than a snapshot with that window dropped.
 - **One unintended write to the real OpenCode log.** Before the sandbox environment existed, the
   freshly installed 2.0.29 binary was run once as `opencode --version` with the real
   environment. It appended to `~/.local/share/opencode/log/opencode.log`; the modification time

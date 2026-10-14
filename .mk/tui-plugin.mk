@@ -42,6 +42,10 @@ tui-plugin-typecheck: tui-plugin-sync ## Typecheck OpenCode TUI plugin
 tui-plugin-lint: tui-plugin-sync ## Lint OpenCode TUI plugin
 	$(BUN) run --cwd $(TUI_PLUGIN_DIR) lint
 
+.PHONY: tui-plugin-test
+tui-plugin-test: tui-plugin-sync ## Run OpenCode TUI plugin unit tests
+	$(BUN) run --cwd $(TUI_PLUGIN_DIR) test
+
 .PHONY: tui-plugin-build
 tui-plugin-build: tui-plugin-sync ## Compile OpenCode TUI plugin entry with the Solid transform
 	$(BUN) run --cwd $(TUI_PLUGIN_DIR) build
