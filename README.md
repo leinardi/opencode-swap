@@ -19,6 +19,13 @@ without taking ownership of credentials or swaps.
 
 ![Account switching from the TUI command palette](https://raw.githubusercontent.com/leinardi/opencode-swap/main/integrations/opencode-tui-plugin/assets/command.gif)
 
+> **OpenCode 2 and the end of the CLI.** OpenCode 2 stores several accounts per provider
+> itself and no longer reads `auth.json`, so this CLI only works with OpenCode 1.x. 0.4.7 is
+> its last release: it adds [`migrate-to-opencode2`](#moving-to-opencode-2) to move your
+> saved accounts into OpenCode 2, and receives no further changes. From 1.0.0,
+> `@leinardi/opencode-swap` is an OpenCode 2 TUI plugin only; OpenCode 1.x users keep the
+> plugin on `@leinardi/opencode-swap@0.4`.
+
 ## Status
 
 Early. Core behavior is covered by automated tests and has been exercised
@@ -39,6 +46,42 @@ every non-OpenAI provider.
 
 🤖 This project is built largely with agentic AI coding tools, under human
 review. Read the code before trusting it with your credentials.
+
+## Moving to OpenCode 2
+
+`opencode-swap migrate-to-opencode2` prints your saved accounts as OpenCode 2 credentials, in
+the format `opencode auth import` reads. It never changes the vault, so 0.4.x keeps working
+if you go back.
+
+```bash
+# Quit OpenCode 1 first, then, with OpenCode 2.0.20 or newer installed:
+opencode-swap migrate-to-opencode2 | opencode auth import
+```
+
+- **Each saved account becomes one OpenCode 2 credential**, labelled with its name. The
+  provider's active account stays active, unless OpenCode 2 already has a credential for
+  that provider; OpenCode 2's own choice is never changed.
+- **The freshest token wins.** An account OpenCode 1 is currently logged into is exported from
+  OpenCode 1's `auth.json`, which holds its latest refreshed token, not from the vault.
+- **Nothing is imported twice.** The command reads what OpenCode 2 already holds
+  (`opencode auth export`, run in memory) and leaves out accounts it already has, including
+  the one OpenCode 2 imported from `auth.json` on its first start. Re-running is safe.
+- **It refuses rather than guess.** It stops, writing nothing, when it cannot tell which saved
+  account OpenCode 1's live login belongs to, or when an id it would create already exists in
+  OpenCode 2 holding something else. The message lists what to remove with
+  `opencode auth logout <integration> <id>`, or which account to leave out with
+  `--skip PROVIDER/NAME`.
+- **Credentials only go where you send them.** Standard output must be a pipe: the command
+  refuses a terminal, and a shell redirect such as `> file`, which would create the file under
+  your umask. With `--output FILE` it writes a new `0600` file instead (never overwriting one);
+  import it with `opencode auth import FILE`, then delete it. `--opencode PATH` picks the OpenCode 2
+  binary.
+
+After importing, switch accounts in OpenCode 2 (`/connect`, or `opencode auth switch`), not with
+0.4.x: the vault and OpenCode 2 now hold the same refresh tokens, and a refresh by either side
+spends the other's copy. OpenCode 1 logins that are not saved accounts are not exported; the
+command names them so you can log in again in OpenCode 2. `wellknown` logins are not migrated
+either.
 
 ## Looking for load balancing?
 
@@ -70,8 +113,11 @@ Adds the active account and its usage to the session prompt, plus `/swap`,
 `/swap-next`, and `/swap-refresh` in the command palette:
 
 ```bash
-opencode plugin @leinardi/opencode-swap --global
+opencode plugin @leinardi/opencode-swap@0.4 --global
 ```
+
+Keep the `@0.4` pin: from 1.0.0 the package is an OpenCode 2 plugin, which OpenCode 1.x
+rejects.
 
 Restart OpenCode afterwards. The plugin invokes `opencode-swap` from your
 `PATH`, so it needs the CLI from step 1 already installed. See
@@ -134,6 +180,7 @@ tokens in place; it won't create a duplicate.
 | `opencode-swap import <path>` | Import accounts from an encrypted archive; prompts to skip or overwrite existing names. |
 | `opencode-swap restore [--pristine] [-y]` | Recover `auth.json` from the most recent pre-switch backup, or from the very first snapshot ever taken (`--pristine`). |
 | `opencode-swap doctor` | Diagnose paths, schema compatibility, secret backend, and backup state. |
+| `opencode-swap migrate-to-opencode2 [--output FILE] [--opencode PATH] [--skip PROVIDER/NAME]...` | Print saved accounts as OpenCode 2 credentials for `opencode auth import`; see [Moving to OpenCode 2](#moving-to-opencode-2). Reads the vault, never changes it. |
 
 `use`, `switch`, `remove`, and `restore` ask for confirmation unless you pass `-y`/`--yes`
 (and refuse to prompt at all on a non-interactive terminal, so pass `-y` in

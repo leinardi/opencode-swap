@@ -40,6 +40,8 @@ src/opencode_swap/
   paths.py             resolves OpenCode's auth.json path and opencode-swap's own data dir
   backup.py            .bak / .pristine / unclaimed-*.json / discarded-restore-*.json snapshots
   transfer.py          versioned password-encrypted account archive format
+  opencode2.py         migrate-to-opencode2: saved account <-> OpenCode 2 credential mapping,
+                       destination reading (`opencode auth export`) and planning
   locking.py           FileLock (fcntl-based, POSIX only)
   macos_keychain.py    subprocess wrapper around /usr/bin/security
   process_detection.py best-effort "is OpenCode running" check
@@ -293,6 +295,36 @@ the archive, preventing one account's token from entering another account's
 registry metadata. Import never changes OpenCode's live `auth.json` or the
 destination registry's active markers. Archive v2 scopes conflicts by
 `(provider, name)` and import remains compatible with archive v1.
+
+## Moving to OpenCode 2
+
+`migrate-to-opencode2` prints saved accounts as OpenCode 2 credential entries for
+`opencode auth import`. Every OpenCode 2 behaviour it relies on is recorded in
+[`opencode-v2-integration.md`](opencode-v2-integration.md).
+
+- **Read-only vault.** The CLI opens this command's `Switcher` with `read_only=True`. That skips
+  the data-root `mkdir`/`chmod` and the registry migration, and builds a read-only `SecretStore`
+  and `Registry` before anything reads the vault. A v1 registry is converted in memory
+  (`store.convert_v1`, shared with `Registry.migrate`). An orphaned sealed file is refused
+  instead of garbage-collected. Every write API raises, and `@_writable` refuses the mutating
+  `Switcher` operations up front. `_ensure_refreshed` neither syncs a live record back nor
+  refreshes, because a refresh would spend a single-use token that a read-only vault could not
+  replace. The lock is still taken; `.lock` is the one file read-only mode may create, and only
+  inside an existing data root (`FileLock(create_parent=False)`). The vault therefore stays
+  byte-for-byte usable by 0.4.x.
+- **Source.** `Switcher.migration_source` takes each saved account's live record when
+  `_live_attribution` positively attributes it (OpenCode 1 rotates tokens in place), and the
+  stored record otherwise. It refuses the whole run on an ambiguous attribution, and reports
+  live logins that match no saved account.
+- **Destination.** `opencode2.read_destination` requires OpenCode 2.0.20 or newer, runs
+  `opencode auth export --standalone` in memory, and parses the result strictly against
+  OpenCode 2's credential schema.
+- **Planning.** `opencode2.plan_migration` leaves out accounts the destination verifiably holds:
+  same integration, and equal `Provider.identity` of the reverse-mapped record. It warns when
+  the destination holds credentials it cannot compare. Because `auth import` skips existing ids
+  without comparing values, it refuses when a deterministic id already exists without verified
+  ownership. The mapping mirrors OpenCode 2's legacy `auth.json` import; the golden fixture
+  `tests/fixtures/opencode2_legacy_import.json` pins it.
 
 ## Concurrency
 

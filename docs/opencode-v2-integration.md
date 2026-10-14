@@ -343,13 +343,31 @@ From the `@opencode/plugin` 2.0.x tarballs (`dist/tui/context.d.ts`) and `@openc
   used. The plugin's `engines.opencode` is `>=2.0.20 <3`; OpenCode 2 ignores it (V4/V5), but
   OpenCode 1 uses it to reject the package (V13).
 
+## Migration end to end
+
+`migrate-to-opencode2` against the sandbox (0.4.x vault built with `opencode-swap add` from fake
+`auth.json` records; `openai/home`, `zai-coding-plan/work`, and `openai/work` live, rotated from
+`R0` in the vault to `R1` in `auth.json`). Each run wrote `--output`, ran
+`opencode auth import --standalone` on it, then checked `auth export` and
+`auth list --format json`:
+
+| DB state | Migration output | Afterwards |
+| --- | --- | --- |
+| fresh | all 3 accounts; `openai/work` (from `R1`) and `zai-coding-plan/work` active | 3 credentials, `work` active with `R1` |
+| fresh, re-run | nothing new: "already present" for all 3 | `Imported 0 credentials`; still 3 |
+| copied 1.19 DB, legacy import pending | only `openai/home`; `openai/work` and `zai-coding-plan/work` "already in OpenCode 2 as 'OAuth'/'API key'" | 3 credentials: the legacy `OAuth` (with `R1`), `home`, `API key` |
+| migration completed, re-run | nothing new | `Imported 0 credentials`; still 3 |
+
+Every account was present exactly once in every state, and the vault's files were
+byte-identical before and after.
+
 ## Deviations and open items
 
 Deviations from the plan, each with its evidence above:
 
-- **F1 not triggered.** `opencode auth export` runs non-interactively (V3), so the migration
-  needs no `--destination` fallback. It should run `auth export --standalone`, so that it neither
-  starts a background service nor talks to an already running service of another version.
+- **F1 not triggered.** `opencode auth export` runs non-interactively (V3), so
+  `migrate-to-opencode2` has no `--destination` option. It runs `auth export --standalone`, so it
+  neither starts a background service nor talks to an already running service of another version.
 - **F2 not triggered.** Optional peers install and render (V4/V5).
 - **F3 not triggered.** z.ai's integration id is `zai-coding-plan` (V8).
 - **F6 resolved to 2.0.20** (V14). `auth export`/`auth import` need 2.0.20 as well, so the

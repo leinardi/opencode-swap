@@ -19,10 +19,15 @@ Install the Python CLI first, then install TUI package globally:
 
 ```bash
 uv tool install opencode-swap
-opencode plugin @leinardi/opencode-swap --global
+opencode plugin @leinardi/opencode-swap@0.4 --global
 ```
 
 Restart OpenCode. The plugin invokes `opencode-swap` from `PATH`.
+
+Keep the `@0.4` pin on OpenCode 1.x. OpenCode 1 resolves a bare package name to `@latest`, and
+from 1.0.0 the package is an OpenCode 2 plugin (`"engines": {"opencode": ">=2.0.20 <3"}`) that
+OpenCode 1 refuses to load. Moving to OpenCode 2? See
+[Moving to OpenCode 2](https://github.com/leinardi/opencode-swap#moving-to-opencode-2).
 
 ## Install from this checkout
 

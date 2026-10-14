@@ -45,8 +45,8 @@ from enum import Enum, auto
 from pathlib import Path
 from typing import Concatenate
 
-from opencode_swap import backup, opencode_auth, paths, transfer, usage
-from opencode_swap.exceptions import AccountExistsError, AuthFileError, OpenCodeSwapError, RefreshError, SchemaError
+from opencode_swap import backup, opencode2, opencode_auth, paths, transfer, usage
+from opencode_swap.exceptions import AccountExistsError, AuthFileError, MigrationError, OpenCodeSwapError, RefreshError, SchemaError
 from opencode_swap.locking import FileLock
 from opencode_swap.models import (
     AccountDesc,
@@ -180,8 +180,8 @@ class Switcher:
             self.registry.migrate()
 
     @classmethod
-    def default(cls) -> Switcher:
-        return cls(opencode_auth_path=paths.get_opencode_auth_path(), data_root=paths.get_data_root())
+    def default(cls, *, read_only: bool = False) -> Switcher:
+        return cls(opencode_auth_path=paths.get_opencode_auth_path(), data_root=paths.get_data_root(), read_only=read_only)
 
     @staticmethod
     def _provider(provider_id: str) -> Provider:
@@ -991,6 +991,68 @@ class Switcher:
         accounts = self.registry.scoped_accounts()
         names = sorted(name for (stored_provider, name) in accounts if stored_provider == provider_id)
         return accounts[(provider_id, names[(names.index(current.name) + 1) % len(names)])]
+
+    def migration_source(self) -> tuple[list[opencode2.SourceAccount], list[opencode2.UnmanagedLogin]]:
+        """Every saved account with its most current record, for
+        `migrate-to-opencode2`, plus OpenCode 1's live logins that match no
+        saved account.
+
+        A saved account positively attributed to the live auth.json record
+        is exported from that record: OpenCode 1 rotates tokens in place, so
+        the stored copy may hold a refresh token that is already spent. An
+        ambiguous attribution refuses the whole run rather than export a
+        possibly-spent token (see `_live_attribution`). Never writes: a
+        read-only Switcher leaves the vault byte-for-byte unchanged, so it
+        still works with 0.4.x if the move is abandoned."""
+        sources: list[opencode2.SourceAccount] = []
+        with self.lock:
+            accounts = self.registry.scoped_accounts()
+            for provider_id, name in sorted(accounts):
+                live_record, ambiguous = self._live_attribution(provider_id, name)
+                if ambiguous:
+                    raise MigrationError(
+                        f"cannot tell whether OpenCode 1's live {provider_id} login is the saved account {provider_id}/{name} "
+                        "(auth.json is unreadable, or its account changed identity); "
+                        f"run 'opencode-swap use {provider_id} {name}' or log out of it in OpenCode 1, then retry"
+                    )
+                record = live_record or self._load_record(provider_id, name, confirmed=True)
+                if record is None:
+                    raise MigrationError(f"the saved account {provider_id}/{name} has no stored credential")
+                sources.append(
+                    opencode2.SourceAccount(
+                        provider_id=provider_id,
+                        name=name,
+                        record=record,
+                        live=live_record is not None,
+                        registry_active=self.registry.get_active(provider_id) == name,
+                    )
+                )
+            unmanaged = self._unmanaged_live_logins({provider_id for provider_id, _name in accounts})
+        return sources, unmanaged
+
+    def _unmanaged_live_logins(self, managed_providers: set[str]) -> list[opencode2.UnmanagedLogin]:
+        if not self.opencode_auth_path.exists():
+            return []
+        try:
+            auth = opencode_auth.read_auth(self.opencode_auth_path)
+        except AuthFileError:
+            # Unreadable: every saved account of a live provider already
+            # refused as ambiguous, and nothing here can be named.
+            return []
+        logins = []
+        for provider_id in sorted(auth):
+            try:
+                provider = self._provider(provider_id)
+                record = provider.extract(auth)
+            except (ValueError, SchemaError):
+                logins.append(opencode2.UnmanagedLogin(provider_id, None))
+                continue
+            if record is None:
+                continue
+            if provider_id in managed_providers and self._find_by_identity(provider_id, provider.identity(record)) is not None:
+                continue
+            logins.append(opencode2.UnmanagedLogin(provider_id, record))
+        return logins
 
     def current(self, provider_id: str = "openai") -> tuple[AccountMeta | None, AccountDesc | None]:
         """Return (managed account meta if recognized, live account description).

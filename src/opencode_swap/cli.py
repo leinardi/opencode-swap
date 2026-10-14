@@ -31,17 +31,21 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import io
 import json
 import math
+import os
+import stat
 import sys
 import time
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
 
-from opencode_swap import __version__, backup, opencode_auth, paths, process_detection
-from opencode_swap.exceptions import AuthFileError, BackupError, OpenCodeSwapError, SchemaError
-from opencode_swap.models import ImportConflictAction, JsonObject, Validity
+from opencode_swap import __version__, backup, opencode2, opencode_auth, paths, process_detection
+from opencode_swap.atomic import atomic_write_bytes_exclusive
+from opencode_swap.exceptions import AuthFileError, BackupError, MigrationError, OpenCodeSwapError, SchemaError
+from opencode_swap.models import ImportConflictAction, JsonObject, Validity, normalize_account_name
 from opencode_swap.providers import get_provider
 from opencode_swap.providers.common import is_json_number
 from opencode_swap.store import RecordLocation
@@ -124,6 +128,22 @@ def _build_parser() -> argparse.ArgumentParser:
     restore_p.add_argument("-y", "--yes", action="store_true", help="don't prompt for confirmation")
 
     subparsers.add_parser("doctor", help="check environment and compatibility")
+
+    migrate_p = subparsers.add_parser(
+        "migrate-to-opencode2",
+        help="print saved accounts as OpenCode 2 credentials for 'opencode auth import' (reads the vault, never changes it)",
+    )
+    migrate_p.add_argument("--output", metavar="FILE", help="write the credentials to a new 0600 file instead of stdout")
+    migrate_p.add_argument(
+        "--opencode", metavar="PATH", default="opencode", help="OpenCode 2 binary to read existing credentials from (default: opencode)"
+    )
+    migrate_p.add_argument(
+        "--skip",
+        metavar="PROVIDER/NAME",
+        action="append",
+        default=[],
+        help="leave a saved account out (repeatable)",
+    )
 
     return parser
 
@@ -784,6 +804,85 @@ def cmd_doctor(switcher: Switcher, args: argparse.Namespace) -> int:
     return 0
 
 
+def _parse_skip(values: list[str], sources: list[opencode2.SourceAccount]) -> set[str]:
+    known = {source.label for source in sources}
+    skip = set()
+    for value in values:
+        # rpartition: a provider id may itself contain "/" (a well-known URL);
+        # an account name never does.
+        provider_id, _sep, name = value.rpartition("/")
+        label = f"{provider_id}/{normalize_account_name(name)}" if provider_id and name else value
+        if label not in known:
+            raise MigrationError(f"--skip {value}: no such saved account (use PROVIDER/NAME as 'opencode-swap list' shows it)")
+        skip.add(label)
+    return skip
+
+
+def _stdout_unsafe_for_credentials() -> str | None:
+    """What stdout is, if credentials must not go there: a terminal, or a
+    file the shell created under its umask (commonly 0644) rather than
+    `--output`'s 0600. Pipes and sockets are fine."""
+    if sys.stdout.isatty():
+        return "a terminal"
+    try:
+        mode = os.fstat(sys.stdout.fileno()).st_mode
+    except (OSError, ValueError, io.UnsupportedOperation):
+        return None  # an in-process stream (tests capture stdout this way)
+    if stat.S_ISFIFO(mode) or stat.S_ISSOCK(mode):
+        return None
+    return "a file" if stat.S_ISREG(mode) else "a device"
+
+
+def cmd_migrate_to_opencode2(switcher: Switcher, args: argparse.Namespace) -> int:
+    output = Path(args.output).expanduser() if args.output else None
+    unsafe = _stdout_unsafe_for_credentials() if output is None else None
+    if unsafe is not None:
+        print(
+            f"opencode-swap: refusing to print credentials to {unsafe}; pipe them into 'opencode auth import' or pass --output FILE",
+            file=sys.stderr,
+        )
+        return 2
+    if output is not None and (output.exists() or output.is_symlink()):
+        raise MigrationError(f"{output} already exists; refusing to overwrite it")
+    sources, unmanaged = switcher.migration_source()
+    if not sources:
+        raise MigrationError("no saved accounts to migrate")
+    skip = _parse_skip(args.skip, sources)
+    destination = opencode2.read_destination(args.opencode)
+    plan = opencode2.plan_migration(sources, destination, unmanaged, skip)
+    payload = (json.dumps(plan.entries, indent=2) + "\n").encode("utf-8")
+    if output is not None:
+        try:
+            atomic_write_bytes_exclusive(output, payload, mode=0o600)
+        except FileExistsError as exc:
+            raise MigrationError(f"{output} already exists; refusing to overwrite it") from exc
+    else:
+        sys.stdout.buffer.write(payload)
+        sys.stdout.flush()
+
+    count = len(plan.entries)
+    print(
+        f"Exported {count} account{'s' if count != 1 else ''} for OpenCode 2:" if count else "Nothing new to export for OpenCode 2.", file=sys.stderr
+    )
+    for line in plan.exported:
+        print(f"  {line}", file=sys.stderr)
+    for line in plan.notes:
+        print(f"note: {line}", file=sys.stderr)
+    for line in plan.warnings:
+        print(f"warning: {line}", file=sys.stderr)
+    if count:
+        if output is not None:
+            print(f"Import with: opencode auth import {output}", file=sys.stderr)
+        print(
+            "Stop OpenCode 1 before importing. After importing, don't switch accounts with opencode-swap 0.4.x: "
+            "the vault and OpenCode 2 hold the same refresh tokens, and a refresh by either spends the other's copy.",
+            file=sys.stderr,
+        )
+    if output is not None:
+        print(f"{output} holds credentials in plain text: delete it once the import succeeded.", file=sys.stderr)
+    return 0
+
+
 _HANDLERS = {
     "add": cmd_add,
     "list": cmd_list,
@@ -798,6 +897,7 @@ _HANDLERS = {
     "import": cmd_import,
     "restore": cmd_restore,
     "doctor": cmd_doctor,
+    "migrate-to-opencode2": cmd_migrate_to_opencode2,
 }
 
 
@@ -814,7 +914,9 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(f"unknown command: {args.command}")
 
     try:
-        switcher = Switcher.default()
+        # The migration only reads the vault; opening it writable would
+        # already migrate a v1 registry before the command even starts.
+        switcher = Switcher.default(read_only=True) if args.command == "migrate-to-opencode2" else Switcher.default()
         return handler(switcher, args)
     except (OpenCodeSwapError, ValueError) as exc:
         print(f"opencode-swap: {exc}", file=sys.stderr)
