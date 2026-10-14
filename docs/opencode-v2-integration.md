@@ -382,6 +382,10 @@ Deviations from the plan, each with its evidence above:
   plan says only `keymap.layer`.
 - **`credential.updated` has no payload** (V7), so "switch/update events for that integration"
   in the plan's cache rules cannot be scoped: an update event invalidates every integration.
+- **The usage cache is fresh for 55 s, not 60 s.** An entry is stamped when its request starts
+  and expires 5 s (the list timeout) early. With exactly 60 s, a poll whose list ran faster than
+  the previous one would still find the previous result fresh, and the footer would refresh only
+  every other poll.
 - **`src/bands.ts` is a copy until the rewrite.** The plan moves the band logic out of
   `src/tui.tsx`. The 0.4.x build compiles `src/tui.tsx` alone into `dist/tui.js`
   (`scripts/build.ts`), so an import of `./bands` from it would ship a broken package. The
