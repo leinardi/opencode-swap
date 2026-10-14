@@ -75,8 +75,11 @@ for file in "${FILES[@]}"; do
 done
 
 # Solid's universal-renderer output imports its runtime helpers from
-# @opentui/solid; the generic JSX fallback imports jsx-runtime instead.
-grep -q 'createComponent' "$ENTRY_FILE" || fail "entry lacks Solid compile markers (createComponent) - not precompiled Solid output"
+# @opentui/solid; the generic JSX fallback imports jsx-runtime instead. Only
+# JSX sources compile to those helpers: the discontinuation notice has none.
+if find "$PLUGIN_DIR/src" -name '*.tsx' -print -quit | grep -q .; then
+  grep -q 'createComponent' "$ENTRY_FILE" || fail "entry lacks Solid compile markers (createComponent) - not precompiled Solid output"
+fi
 if grep -l 'jsx-runtime\|jsx-dev-runtime\|jsxDEV' "${FILES[@]}"; then
   fail "the files above use the generic JSX runtime - Solid reactivity would not be wired"
 fi

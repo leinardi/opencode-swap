@@ -6,7 +6,6 @@
       "name": "@leinardi/opencode-swap",
       "devDependencies": {
         "@opencode/plugin": "2.0.20",
-        "@opencode/theme": "2.0.20",
         "@opentui/core": "0.5.17",
         "@opentui/solid": "0.5.17",
         "@tsconfig/bun": "1.0.11",
@@ -18,16 +17,6 @@
         "typescript": "6.0.3",
         "typescript-eslint": "8.71.1",
       },
-      "peerDependencies": {
-        "@opentui/core": "0.5.x",
-        "@opentui/solid": "0.5.x",
-        "solid-js": "1.9.x",
-      },
-      "optionalPeers": [
-        "@opentui/core",
-        "@opentui/solid",
-        "solid-js",
-      ],
     },
   },
   "packages": {
