@@ -2,7 +2,7 @@ name: Publish TUI Plugin
 
 on:
   push:
-    tags: ["tui-v*"]
+    tags: ["v*"]
   workflow_dispatch:
 
 permissions:
@@ -32,26 +32,27 @@ jobs:
         run: npm install -g npm@11.5.1
       - name: Verify release version
         id: package
-        working-directory: integrations/opencode-tui-plugin
         run: |
           VERSION=$(node -p "require('./package.json').version")
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          if [ "$GITHUB_REF_TYPE" = "tag" ] && [ "$GITHUB_REF_NAME" != "tui-v$VERSION" ]; then
-            echo "Tag must be tui-v$VERSION, got $GITHUB_REF_NAME" >&2
+          if [ "$GITHUB_REF_TYPE" = "tag" ] && [ "$GITHUB_REF_NAME" != "v$VERSION" ]; then
+            echo "Tag must be v$VERSION, got $GITHUB_REF_NAME" >&2
             exit 1
           fi
       - name: Install locked dependencies
-        run: bun install --cwd integrations/opencode-tui-plugin --frozen-lockfile
+        run: bun install --frozen-lockfile
       # npm publish below runs with --ignore-scripts, so prepublishOnly will
       # not build; compile the entry explicitly before verifying or publishing.
       - name: Build plugin entry
-        run: bun run --cwd integrations/opencode-tui-plugin build
+        run: bun run build
+      - name: Run unit tests
+        run: bun run test
       - name: Verify package
-        run: bun run --cwd integrations/opencode-tui-plugin check
+        run: bun run check
       - name: Verify npm peer resolution
-        run: ./scripts/check-npm-resolution.sh integrations/opencode-tui-plugin
+        run: ./scripts/check-npm-resolution.sh .
       - name: Verify compiled entry
-        run: ./scripts/check-tui-entry-compiled.sh integrations/opencode-tui-plugin
+        run: ./scripts/check-tui-entry-compiled.sh .
       - name: Check existing version
         id: registry
         env:
@@ -88,7 +89,6 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
       - name: Publish with npm provenance
         if: steps.registry.outputs.published != 'true'
-        working-directory: integrations/opencode-tui-plugin
         env:
           DIST_TAG: ${{ steps.disttag.outputs.tag }}
         run: npm publish --access public --provenance --ignore-scripts --tag "$DIST_TAG"

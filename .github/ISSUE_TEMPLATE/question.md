@@ -46,9 +46,9 @@ assignees: []
 
 <!-- Fill in what makes sense for your question, or remove fields that don't apply. -->
 
-* `opencode-swap --version`: `?`
-* OpenCode version: `?`
-* Install method (`uv tool install`, `pipx`, `uvx`, checkout): `?`
+* `@leinardi/opencode-swap` version: `?`
+* OpenCode version (`opencode --version`): `?`
+* Install method (`opencode plugin add`, `cli.json` `"plugins"`, local checkout): `?`
 * Operating system and version: `?`
 * Provider and auth type: `?`
 

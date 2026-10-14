@@ -1,0 +1,59 @@
+{
+  "name": "@leinardi/opencode-swap",
+  "version": "0.5.0",
+  "description": "Discontinued: replaces the opencode-swap TUI plugin with a notice to remove it from OpenCode 2",
+  "type": "module",
+  "license": "MIT",
+  "author": "Roberto Leinardi",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/leinardi/opencode-swap.git"
+  },
+  "bugs": {
+    "url": "https://github.com/leinardi/opencode-swap/issues"
+  },
+  "homepage": "https://github.com/leinardi/opencode-swap#readme",
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "opencode-tui",
+    "deprecated"
+  ],
+  "scripts": {
+    "build": "bun scripts/build.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test ./test",
+    "lint": "eslint src test --max-warnings 0",
+    "lint:fix": "eslint src test --fix --max-warnings 0",
+    "pack:check": "npm pack --dry-run --ignore-scripts",
+    "check": "bun run typecheck && bun run lint && bun run test && bun run pack:check",
+    "prepublishOnly": "bun run build && bun run check"
+  },
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE"
+  ],
+  "exports": {
+    "./tui": "./dist/tui.js"
+  },
+  "engines": {
+    "opencode": ">=2.0.0 <3"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "devDependencies": {
+    "@opencode/plugin": "2.0.20",
+    "@opentui/core": "0.5.17",
+    "@opentui/solid": "0.5.17",
+    "@tsconfig/bun": "1.0.11",
+    "@types/bun": "1.4.2",
+    "eslint": "10.12.0",
+    "eslint-plugin-solid": "0.18.1",
+    "jiti": "2.7.0",
+    "solid-js": "1.9.17",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.71.1"
+  }
+}

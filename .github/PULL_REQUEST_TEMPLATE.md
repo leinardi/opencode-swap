@@ -19,9 +19,9 @@ Any HTML comment will be stripped when the markdown is rendered, so you don't ne
   [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) with a scope
   (`type(scope): subject`)
 - [ ] Each commit type, and this pull request's title, matches whether the change ships: `feat` or
-  `fix` for what PyPI or npm users should receive; never `perf` or `refactor` for a change that
+  `fix` for what npm users should receive; never `perf` or `refactor` for a change that
   ships nothing, since commitizen bumps a patch for both
-  ([versioning](https://github.com/leinardi/opencode-swap/blob/main/CONTRIBUTING.md#versioning))
+  ([versioning](https://github.com/leinardi/opencode-swap/blob/main/AGENTS.md#commit-messages))
 - [ ] I have performed a self-review of my own code
 - [ ] There are no `WIP` commits in this PR
 

@@ -1,11 +1,10 @@
 version: 2
 
 # Every ecosystem uses chore(deps), which commitizen does not count as a release. Almost none of
-# these bumps changes what users install: pyproject.toml declares the runtime dependencies as
-# lower bounds, so Dependabot only moves uv.lock, and the TUI plugin's runtime packages are peers
-# that OpenCode provides. The exception is @opentui/solid, whose transform compiles
-# dist/tui.js. When a bump should ship (a fix in a lower bound, a changed plugin build), raise
-# the bound in a fix(deps) commit or release with an explicit version.
+# these bumps changes what users install: the TUI plugin's runtime packages are optional peers
+# that OpenCode provides, and its development dependencies never ship. The exception is
+# @opentui/solid, whose transform compiles dist/. When a bump should ship (a changed plugin
+# build), release it in a fix(deps) commit or with an explicit version.
 updates:
   - package-ecosystem: "github-actions"
     directory: "/"
@@ -31,20 +30,8 @@ updates:
         patterns:
           - "*"
 
-  - package-ecosystem: "uv"
-    directory: "/"
-    schedule:
-      interval: "monthly"
-    commit-message:
-      prefix: "chore(deps)"
-    labels: ["dependencies", "python"]
-    groups:
-      python-dependencies:
-        patterns:
-          - "*"
-
   - package-ecosystem: "bun"
-    directory: "/integrations/opencode-tui-plugin"
+    directory: "/"
     schedule:
       interval: "monthly"
     commit-message:
@@ -61,6 +48,12 @@ updates:
       # Move the peers and these together, by hand, when moving to 0.6.
       - dependency-name: "@opentui/*"
         versions: [">=0.6.0"]
+      # @opencode/plugin and @opencode/theme are pinned to the oldest OpenCode 2 the plugin
+      # supports (engines.opencode), so the typecheck catches an API newer than that: merge a
+      # 2.x bump only together with raising engines.opencode. 3.x is a different host API
+      # altogether.
+      - dependency-name: "@opencode/*"
+        versions: [">=3.0.0"]
     groups:
       tui-plugin-dependencies:
         patterns:

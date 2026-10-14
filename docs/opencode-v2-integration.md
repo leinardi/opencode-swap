@@ -1,10 +1,15 @@
 # OpenCode 2 integration findings
 
+> **Outcome.** opencode-swap was discontinued on 2026-10-14, before the OpenCode 2 plugin these
+> findings were gathered for was released. The plugin is at tag `opencode2-plugin-final`; `main`
+> ships only a notice (see "On a real installation" for why it has to exist). The open items at
+> the end are no longer pursued. The findings themselves still describe OpenCode 2.0.29.
+
 Ground truth for the OpenCode 2 work: the `migrate-to-opencode2` command of the last Python
 release and the OpenCode 2 TUI plugin. Every finding below was read from OpenCode's source or
 observed in the isolated sandbox (`scripts/oc2-sandbox.sh`), with fake credentials only. When
-OpenCode behaviour is in question, check and update this file rather than re-guessing, the way
-`docs/opencode-auth.md` serves OpenCode 1.x.
+OpenCode behaviour is in question, check and update this file rather than re-guessing. (The
+CLI's equivalent for OpenCode 1.x, `docs/opencode-auth.md`, is in the `v0.5.0` tag.)
 
 Sources:
 
@@ -87,7 +92,7 @@ Sandbox, with `auth.json` from fake records and `opencode auth export --standalo
 | DB state | Result |
 | --- | --- |
 | fresh (no DB) | `[]`; the migration is recorded as completed and `auth.json` is left as is |
-| copied OpenCode 1.19.0 DB (has `session`) | 6 credentials imported, `xai` dropped; captured as `tests/fixtures/opencode2_legacy_import.json` |
+| copied OpenCode 1.19.0 DB (has `session`) | 6 credentials imported, `xai` dropped; captured as `tests/fixtures/opencode2_legacy_import.json` (0.4.x line) |
 | migration already completed, `auth.json` replaced, one imported row deleted | unchanged: no re-import, and the deleted row stays deleted |
 
 ## V3: `opencode auth export` and `import`
@@ -180,6 +185,11 @@ characters from `0-9A-Za-z` (`packages/schema/src/identifier.ts:3-31`).
   `/tmp/oc2-spike/probe-local` (a raw `tui.tsx`, not precompiled), listed directly in `cli.json`
   `"plugins"`, loaded next to the npm probe, and its footer counter advanced every second. It
   has to be added to `cli.json` by hand, since `plugin add` rejects it.
+- **A local directory's `package.json` is not read.** Without a package name, `Host.resolve`
+  looks for the plain path `<dir>/tui` (`packages/plugin/src/host.ts:19-24`), so `exports` is
+  ignored. Listing this repository's root in the sandbox's `cli.json` loaded nothing (`/swap`:
+  "No matching commands"). A directory holding only a `tui.js` that re-exports the root's
+  `dist/tui.js` loaded, and `/swap` listed the fake accounts.
 - **Installation.** Arborist `reify` with the user's npm config, `audit: false` and
   `ignoreScripts: true`, without `legacyPeerDeps` (`packages/util/src/npm.ts:209-242`). The cache
   is `<XDG_CACHE_HOME>/opencode/npm/<name>@<spec>/<generation>/` (`npm.ts:141,302,320`).
@@ -188,6 +198,13 @@ characters from `0-9A-Za-z` (`packages/schema/src/identifier.ts:3-31`).
   (`npm.ts:256-260`). `opencode plugin check` reported `oc2-probe-plugin 1.0.0 (update
   available)`; `opencode plugin update` installed 1.0.1 as a new generation, picked up on the next
   TUI start.
+- **The `/plugins` dialog updates server plugins only.** Its `update` action (`ctrl+u`,
+  `dialog.plugins.update`, `packages/tui/src/config/keybind.ts:281`) is shown only for an entry
+  that `outdated()` accepts, which requires `runtime === "server"` and a package source
+  (`packages/tui/src/feature-plugins/system/plugins.tsx:43,304-305`); its "check for updates"
+  action is likewise hidden unless a server package plugin is configured (`:212-221`). A TUI-only
+  plugin is updated with `opencode plugin update`, which installs TUI targets through npm
+  (`packages/cli/src/commands/handlers/plugin/update.ts:23-29`).
 - **Precompiled Solid output renders reactively.** The probe, built per file with
   `@opentui/solid`'s `transformSolidSource`, showed a footer counter that advanced every second.
 - **Raw `.tsx` from npm does not load.** A package exporting `./src/tui.tsx` failed with "Cannot
@@ -319,7 +336,7 @@ characters from `0-9A-Za-z` (`packages/schema/src/identifier.ts:3-31`).
   published with `">=1.0.0"` was imported (its module side effect ran).
 - **A bare package name means `@latest` in OpenCode 1** (`v1:packages/opencode/src/plugin/shared.ts:210`),
   so after a 1.0.0 release, OpenCode 1 users who list `@leinardi/opencode-swap` would get the
-  OpenCode 2 build and have it rejected. They need the `@0.4` pin.
+  OpenCode 2 build and have it rejected. They need a pin such as `@0.5`.
 - **`@leinardi/opencode-swap@0.4` loads under 1.19.** In `tui.json` it resolved 0.4.6 and
   registered `/swap`, `/swap-next` and `/swap-refresh`.
 
@@ -361,6 +378,106 @@ From the `@opencode/plugin` 2.0.x tarballs (`dist/tui/context.d.ts`) and `@openc
 Every account was present exactly once in every state, and the vault's files were
 byte-identical before and after.
 
+## Plugin end to end
+
+The rewritten plugin, packed and published to the local verdaccio as `1.0.0-e2e.1`, listed in
+`cli.json` `"plugins"` next to the event-logging probe. Credentials were fake and imported with
+`auth import --standalone`: two OpenAI OAuth entries (`work`, `home`) whose access tokens are
+unsigned JWTs with made-up emails, and two z.ai keys (`team`, `solo`).
+
+| Check | 2.0.29 | 2.0.20 |
+| --- | --- | --- |
+| Plugin loads; footer hidden for the free OpenCode model (no stored credential) | yes | yes |
+| After `/models` → an OpenAI model, footer reads `work · n/a` (fake token refused) | yes | yes |
+| `/swap` lists `home home@example.com · n/a`, `work work@example.com · active`, `solo …bbbb · n/a`, `team …aaaa · active`, grouped by integration | yes | yes |
+| Picking `home`, confirming: toast "openai now uses home.", footer `home · n/a`, probe logged `credential.switched {openai, cred_…home…}`, prompt model unchanged | yes | yes |
+| `/swap-next` confirms "Use work for openai?", switches back, `credential.switched` logged | yes | yes |
+| `/swap-refresh` toasts "Accounts and usage refreshed." | yes | yes |
+| A GLM model moves the footer to `team · n/a` | yes | not run |
+| No planted token, key or JWT payload in the tmux capture or `opencode.log` | yes | yes |
+| `oc2-sandbox.sh check` afterwards | passed | passed |
+
+- **The packaging guards, each broken once** on a scratch copy of the package, all failed as
+  intended:
+
+  | Break | Guard | Failure |
+  | --- | --- | --- |
+  | `exports["./tui"]` pointing at `./src/tui.tsx` | `check-tui-entry-compiled.sh` | "entry must be compiled .js" |
+  | an added `"."` export | `check-tui-entry-compiled.sh` | "package.json exports must be exactly ./tui" |
+  | `import { Effect } from "effect"` appended to `dist/state.js` | `check-tui-entry-compiled.sh` | "runtime import of effect or @opencode/*" |
+  | `import … from "@opencode/plugin/tui"` appended to `dist/usage/zai.js` | `check-tui-entry-compiled.sh` | "runtime import of effect or @opencode/*" |
+  | a `jsx-runtime` import appended to `dist/footer.js` | `check-tui-entry-compiled.sh` | "use the generic JSX runtime" |
+  | the default export's `setup` renamed | `check-tui-entry-compiled.sh` | "must have a string id and a function setup" |
+  | `"./bands.js"` turned into `"./bands"` in `dist/state.js` | `check-tui-entry-compiled.sh` | "relative imports above lack their .js extension" |
+  | a required `solid-js` `1.8.x` peer next to `@opentui/solid` 0.5.17 (which pins `solid-js` 1.9.12) | `check-npm-resolution.sh` | `ERESOLVE: unable to resolve dependency tree` |
+
+  Bun resolves an extensionless relative import on its own, which is why the last
+  `check-tui-entry-compiled.sh` row needed its own grep rather than the import of the entry.
+- **The footer's first lookup.** A second build (`1.0.0-e2e.2`) looks usage up as soon as a
+  footer mounts, not only when its integration changes: home and every session render their own
+  prompt, so navigating mounts a fresh footer. On 2.0.29 it showed `work · n/a` right after the
+  model switch, with no planted value in the capture or the log.
+- **2.0.17** (no `credential.list`): one toast "opencode-swap needs OpenCode 2.0.20 or later.",
+  and `/swap` found "No matching commands".
+- **OpenCode 1.19** with `@leinardi/opencode-swap@1.0.0-e2e.1` in `tui.json`: the package was
+  installed into the plugin cache but never registered a command, the `engines.opencode` gate of
+  V13. With `@leinardi/opencode-swap@0.4` it resolved 0.4.6 and offered `/swap`, `/swap-next`
+  and `/swap-refresh`.
+
+## The plugin at the repository root
+
+The plugin moved from `integrations/opencode-tui-plugin/` to the repository root. Its make
+targets are now `plugin-*`; the `tui-plugin-*` names stay as aliases without help text, so
+`make help` lists each target once. The published payload is unchanged apart from `README.md`
+and `LICENSE`, which are now the repository's own.
+
+`auto-tag-release.yaml` was replayed on a scratch clone: its "Detect a version bump" script,
+extracted from the workflow, ran with `PACKAGE_JSON: package.json` against the move commit and
+then against a follow-up commit bumping the version.
+
+| Commit | Output |
+| --- | --- |
+| the move (`package.json` 0.4.6, absent from the parent) | `The parent commit has no package.json - not a release commit.`, `bumped=false` |
+| a follow-up bump to 1.0.0 | `Version changed: 0.4.6 -> 1.0.0.`, `bumped=true`, `version=1.0.0` |
+
+On `main` the move lands in a merge commit whose first parent still has the plugin under
+`integrations/`, so the same check applies there: the move tags and publishes nothing.
+
+## On a real installation
+
+On 2026-10-14 the maintainer's machine moved from OpenCode 1.19.0 to 2.0.29 with real accounts,
+at the maintainer's request, after a backup of every OpenCode and opencode-swap directory:
+OpenCode's own installer (`install --version 2.0.29 --no-modify-path`), `migrate-to-opencode2`
+run from this branch's history, then the plugin's build through a local wrapper directory.
+Nothing below quotes a credential.
+
+- **The migration matched the sandbox.** OpenCode 2's first start (the migration's `auth export`)
+  imported OpenCode 1's two live logins, labelled `OAuth` (openai) and `API key`
+  (zai-coding-plan), plus an `opencode` API key. `migrate-to-opencode2` reported both live
+  accounts "already in OpenCode 2" and exported the third saved account, which `auth import`
+  added.
+- **Real usage renders.** With an OpenAI model selected, the footer read
+  `OAuth · 5h 0% @Oct 15, 03:09 | 7d 2% @Oct 21, 14:10` for the legacy-imported credential (a
+  `chatgpt-browser` one, as imported legacy OpenAI credentials keep that method, V12). The
+  migrated account, whose access token had expired in the vault, showed `n/a`, as designed: the
+  plugin never refreshes a token.
+- **Neither OpenAI token carried an email claim**, so both OpenAI rows in `/swap` had no
+  description. The legacy-imported one is labelled only `OAuth`.
+- **OpenCode 2 turns OpenCode 1's `tui.json` into `cli.json`**, once, on its first config load,
+  and only while `cli.json` does not exist (`packages/cli/src/config/migrate.ts:37,100-117`). It
+  carries over the theme and display settings from `tui.json` and `kv.json`, and the plugins:
+  every `plugin` entry, and every `plugin_enabled` id as a bare entry (`:160-166`). This
+  machine's `tui.json` (`"plugin": ["@leinardi/opencode-swap"]`, `"plugin_enabled":
+  {"opencode-swap": true}`) became `"plugins": ["@leinardi/opencode-swap", "opencode-swap"]`.
+- **A migrated `"opencode-swap"` entry can install someone else's package.** The TUI handles
+  `plugins` in order; a bare name only enables an already resolved plugin whose id matches, and
+  otherwise is resolved and installed as an npm spec (`packages/tui/src/plugin/context.tsx:318-350`).
+  npm has an unrelated `opencode-swap` package (0.1.3). Whenever `@leinardi/opencode-swap` fails
+  to load first (the 0.4.x build does, with "Invalid V2 TUI plugin module", V4/V5), that package
+  would be installed and run in the TUI. Here the entries were replaced before the TUI first
+  started, and OpenCode 2's plugin cache (`~/.cache/opencode/npm`) did not exist afterwards, so
+  nothing was installed.
+
 ## Deviations and open items
 
 Deviations from the plan, each with its evidence above:
@@ -382,6 +499,27 @@ Deviations from the plan, each with its evidence above:
   plan says only `keymap.layer`.
 - **`credential.updated` has no payload** (V7), so "switch/update events for that integration"
   in the plan's cache rules cannot be scoped: an update event invalidates every integration.
+- **The usage cache is fresh for 55 s, not 60 s.** An entry is stamped when its request starts
+  and expires 5 s (the list timeout) early. With exactly 60 s, a poll whose list ran faster than
+  the previous one would still find the previous result fresh, and the footer would refresh only
+  every other poll.
+- **`src/bands.ts` was a copy until the rewrite.** The 0.4.x build compiled `src/tui.tsx` alone
+  into `dist/tui.js`, so the TypeScript ports left it untouched; the rewrite replaced it and its
+  copy of the band logic.
+- **The plugin is typechecked against `@opencode/plugin` and `@opencode/theme` 2.0.20**, the F6
+  minimum, so a member newer than that fails `tsc`.
+- **`engines` lists only `opencode`.** The old `node` entry is gone: the plugin runs in
+  OpenCode's Bun runtime.
+- **`sessionStatus` carries the session's integration as well as its run state.** `/swap-next`
+  and the footer poll need the current integration (the F4 chain plus the provider list), and
+  the confirm text notes a request in progress.
+- **The TypeScript usage lookups differ from the 0.4.x CLI's `usage.py` in three ways.**
+  - Every failure message is fixed text. `usage.py` printed a network error's own message, which
+    the plugin never does.
+  - Redirects are not followed, so a credential only ever goes to the two usage endpoints; a
+    redirect reports its HTTP status.
+  - `JSON.parse` rejects the `NaN`/`Infinity` literals Python's `json` accepts, so such a body is
+    invalid JSON rather than a snapshot with that window dropped.
 - **One unintended write to the real OpenCode log.** Before the sandbox environment existed, the
   freshly installed 2.0.29 binary was run once as `opencode --version` with the real
   environment. It appended to `~/.local/share/opencode/log/opencode.log`; the modification time
@@ -391,6 +529,13 @@ Deviations from the plan, each with its evidence above:
   directories, coinciding with a concurrently running real OpenCode 1.x. A clean 2.0.29 cycle
   afterwards (legacy-import seed, `auth export`, TUI with the probe plugin, stop) passed `check`,
   as did the 2.0.20 cycle.
+
+- **The README points updates at `opencode plugin update` only.** The plan named
+  `opencode plugin update` or `ctrl+u`; `ctrl+u` in `/plugins` never offers to update a TUI-only
+  plugin (V4/V5).
+- **The README has no screenshots.** The GIFs and PNGs in `assets/` show the 0.4.x plugin in
+  OpenCode 1's session prompt, not the OpenCode 2 footer, so the README describes the footer in
+  text. They stay in the repository until replaced.
 
 Open items for the human checklist:
 
@@ -402,3 +547,24 @@ Open items for the human checklist:
 - **`credential.updated` without a payload** means the plugin cannot tell which integration a
   label change touched. It re-lists credentials on every update event, which is cheap; confirm
   it causes no visible flicker.
+- **A stale `context.client` after a reconnect (V7).** The plugin cannot reach the replacement
+  client. A list that never settles times out after 5 s and shows as an error rather than
+  blocking the plugin, but a reconnect during a session should be tried with a real service
+  restart.
+- **Real usage numbers:** seen for a legacy-imported OpenAI credential (On a real
+  installation). Still to see: z.ai, an OpenAI credential after OpenCode refreshes it, and the
+  pace colours away from green.
+- **No email for real OpenAI tokens.** Both real access tokens lacked the claim, so OpenAI rows
+  show only their label, and a legacy-imported one reads `OAuth`. The README could tell users to
+  rename it in `/connect` (`ctrl+r`); whether a credential's `metadata` carries an email is
+  unchecked, and would need checking without printing values.
+- **The migrated `"opencode-swap"` plugin entry** (On a real installation). Every 0.4.x user
+  with the plugin enabled in `tui.json` gets it in `cli.json`, next to whatever
+  `@leinardi/opencode-swap` spec they had; with `@0.4` (as the 0.4.x README says), the first
+  load fails and the unrelated npm package is installed. The README's migration steps now say to
+  fix `cli.json` before the first start. Since then `migrate-to-opencode2` (released as 0.5.0)
+  prints the same warning, and the 1.x notice keeps the id. Still worth it: an OpenCode issue to
+  migrate `plugin_enabled` ids as enable-only.
+- **New screenshots** of the OpenCode 2 footer and `/swap` picker, with real usage, to replace
+  `assets/` and go back into the README.
+- **The `legacy` dist-tag:** point it at 0.5.0 once 1.0.0 is out (`docs/releasing.md#sunset`).

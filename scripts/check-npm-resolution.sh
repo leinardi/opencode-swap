@@ -24,8 +24,9 @@
 #
 # Verify the TUI plugin's npm payload installs the way OpenCode installs it.
 #
-# OpenCode installs npm TUI plugins itself, with @npmcli/arborist reify() and
-# without legacyPeerDeps or force (packages/core/src/npm.ts). A peer conflict
+# OpenCode installs npm TUI plugins itself, with @npmcli/arborist reify(),
+# `audit: false` and `ignoreScripts: true`, without legacyPeerDeps or force
+# (OpenCode 2: packages/util/src/npm.ts:209-242). A peer conflict
 # that Bun only warns about therefore makes the plugin uninstallable for every
 # user, while `bun run check` still passes green — exactly how 0.4.0 shipped
 # with a solid-js peer that no @opentui/solid 0.5.x release could satisfy.
@@ -37,7 +38,8 @@
 # keymap 0.6 and fails with ERESOLVE, so that package never installed.
 set -euo pipefail
 
-# OpenCode's packages/core/package.json pins this. Bump it when OpenCode does.
+# OpenCode 2's workspace catalog pins this (package.json, "@npmcli/arborist").
+# Bump it when OpenCode does.
 ARBORIST_VERSION="9.4.0"
 
 PLUGIN_DIR="${1:?usage: check-npm-resolution.sh <plugin-dir>}"
@@ -92,6 +94,7 @@ const arborist = new Arborist({
   progress: false,
   savePrefix: "",
   ignoreScripts: true,
+  audit: false,
 })
 const label = (node) => (node ? `${node.name}@${node.version}` : "?")
 try {
