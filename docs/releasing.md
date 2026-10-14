@@ -1,11 +1,11 @@
 # Releasing
 
-This repository ships one package, `@leinardi/opencode-swap` on npm. A release is a `v<version>`
-tag on `main`, its GitHub release, and the npm publish of that version.
+opencode-swap is discontinued. Its last releases are 0.4.7 (the Python CLI on PyPI and the
+OpenCode 1 TUI plugin on npm) and 1.0.0 (an npm-only notice for OpenCode 2). This page records
+how a release worked, for those two, and the [sunset](#sunset) that follows them.
 
-The Python CLI (`opencode-swap` on PyPI) is retired at 0.4.7 and gets no further releases. The
-0.4.x TUI plugin for OpenCode 1 lives on the `maint/0.4` branch; see
-[The 0.4.x line](#the-04x-line).
+A release is a `v<version>` tag on `main`, its GitHub release, and the npm publish of that
+version.
 
 ## Cutting a release
 
@@ -14,7 +14,7 @@ The Python CLI (`opencode-swap` on PyPI) is retired at 0.4.7 and gets no further
    pass one (e.g. `1.2.0`, with or without a leading `v`) to force it.
    - A derived version comes from commitizen (`cz bump --get-next`, pinned at 4.19.2 and run
      with `uvx`, configured in `.cz.toml`); see the bump table in
-     [`CONTRIBUTING.md`](../CONTRIBUTING.md#versioning). With nothing but "none" commits since
+     [`AGENTS.md`](../AGENTS.md#commit-messages). With nothing but "none" commits since
      the last tag, the run fails with "nothing to bump".
    - An explicit version must be higher than the latest release.
    - Dispatched from any other branch, the run fails.
@@ -59,7 +59,7 @@ refuses to publish a version npm already has.
 
 | Dist-tag | Holds | Installed by |
 | --- | --- | --- |
-| `latest` | the newest 1.x release (OpenCode 2) | `opencode plugin add @leinardi/opencode-swap`, and any bare package name |
+| `latest` | the 1.x discontinuation notice (OpenCode 2) | `opencode plugin add @leinardi/opencode-swap`, and any bare package name |
 | `legacy` | the newest 0.4.x release (OpenCode 1) | `@leinardi/opencode-swap@legacy` |
 
 npm moves `latest` to whatever is published without `--tag`. The publisher therefore compares
@@ -74,36 +74,28 @@ out, point `legacy` at it by hand, once:
 npm dist-tag add @leinardi/opencode-swap@0.4.7 legacy
 ```
 
-## The 0.4.x line
+## Sunset
 
-`maint/0.4` is cut from `v0.4.7` and carries the Python CLI and the OpenCode 1 TUI plugin as
-they were, with their own workflows, `AGENTS.md` and documentation. Its workflows release only
-from `main`, so a fix there is released by hand. Only the plugin is released: PyPI stays at
-0.4.7.
+In order, once 0.4.7 and then 1.0.0 are published:
 
-1. Branch from `maint/0.4` and open the fix as a pull request against `maint/0.4`; the branch
-   ruleset covers `maint/*`, so it needs the same checks and review as `main`.
-2. In a second pull request against `maint/0.4`, set the plugin's version,
-   `integrations/opencode-tui-plugin/package.json`, to the next `0.4.N`, and regenerate its
-   lockfile with `bun install --cwd integrations/opencode-tui-plugin`. Leave `pyproject.toml`
-   alone.
-3. After merging it, tag the merge commit `tui-v0.4.N` and push the tag, then create its
-   GitHub release without the **Latest** badge:
+1. Point `legacy` at the last OpenCode 1 release:
 
    ```bash
-   git tag tui-v0.4.N <merge-commit>
-   git push origin tui-v0.4.N
-   gh release create tui-v0.4.N --verify-tag --generate-notes --latest=false
+   npm dist-tag add @leinardi/opencode-swap@0.4.7 legacy
    ```
 
-   The pushed tag fires `maint/0.4`'s own `publish-tui-plugin.yml` (`tui-v*`), which publishes
-   0.4.N under `legacy` because it is lower than `latest`. Create the release right away: the
-   publisher creates it itself if it is still missing when it finishes, and GitHub may then
-   give it the **Latest** badge; `gh release edit v<newest 1.x> --latest` puts it back.
-4. Check `npm view @leinardi/opencode-swap dist-tags`: `latest` unchanged, `legacy` at 0.4.N.
+2. Mark every version deprecated on npm. `npm install` then prints the message; OpenCode installs
+   the package as before.
 
-**Never push a `v*` tag on `maint/0.4`**: there it fires `publish-pypi.yml`. Never merge
-`maint/0.4` into `main` or the other way round.
+   ```bash
+   npm deprecate @leinardi/opencode-swap "opencode-swap is discontinued: see https://github.com/leinardi/opencode-swap#readme"
+   ```
+
+3. Archive the `opencode-swap` project on PyPI (project settings, "Archive project"). Installs
+   keep working; the page says the project is no longer maintained.
+4. Push the `opencode2-plugin-final` tag, if it is not on GitHub yet.
+5. Archive the GitHub repository (Settings, "Archive this repository"), last: an archived
+   repository runs no workflows, so every release above must be finished first.
 
 ## One-time setup (already done)
 

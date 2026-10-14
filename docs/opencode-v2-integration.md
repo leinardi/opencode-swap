@@ -1,5 +1,10 @@
 # OpenCode 2 integration findings
 
+> **Outcome.** opencode-swap was discontinued on 2026-10-14, before the OpenCode 2 plugin these
+> findings were gathered for was released. The plugin is at tag `opencode2-plugin-final`; `main`
+> ships only a notice (see "On a real installation" for why it has to exist). The open items at
+> the end are no longer pursued. The findings themselves still describe OpenCode 2.0.29.
+
 Ground truth for the OpenCode 2 work: the `migrate-to-opencode2` command of the last Python
 release and the OpenCode 2 TUI plugin. Every finding below was read from OpenCode's source or
 observed in the isolated sandbox (`scripts/oc2-sandbox.sh`), with fake credentials only. When
