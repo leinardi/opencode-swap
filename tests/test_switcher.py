@@ -30,6 +30,7 @@ from opencode_swap import macos_keychain
 from opencode_swap.exceptions import AccountExistsError, OpenCodeSwapError, RefreshError, SchemaError
 from opencode_swap.models import AccountMeta, Platform, Validity
 from opencode_swap.oauth_refresh import RefreshedTokens
+from opencode_swap.store import SecretStore
 from opencode_swap.switcher import RefreshOutcome, Switcher
 from tests.helpers import make_jwt
 
@@ -878,3 +879,182 @@ def test_add_preserves_other_provider_keys_untouched(switcher):
     switcher.add_account("work")
     live = json.loads(switcher.opencode_auth_path.read_text())
     assert live["anthropic"] == {"type": "api", "key": "keep-me"}
+
+
+# --- read-only mode -------------------------------------------------------
+
+
+def vault_snapshot(root):
+    """Every file under the data root as relative path -> bytes, except
+    `.lock`: taking the lock may create it, the one write read-only mode
+    allows (see Switcher's docstring)."""
+    return {str(path.relative_to(root)): path.read_bytes() for path in sorted(root.rglob("*")) if path.is_file() and path.name != ".lock"}
+
+
+def build_vault(tmp_path):
+    """A writable vault with accounts "a" (stored) and "b" (live)."""
+    switcher = Switcher(tmp_path / "opencode" / "auth.json", tmp_path / "opencode-swap", platform=Platform.UNKNOWN)
+    write_auth(switcher.opencode_auth_path, oauth_entry(account_id="acct-a", refresh="ra"))
+    switcher.add_account("a")
+    write_auth(switcher.opencode_auth_path, oauth_entry(account_id="acct-b", refresh="rb"))
+    switcher.add_account("b")
+    return switcher
+
+
+def read_only_switcher(tmp_path, **kwargs):
+    return Switcher(tmp_path / "opencode" / "auth.json", tmp_path / "opencode-swap", platform=Platform.UNKNOWN, read_only=True, **kwargs)
+
+
+def test_read_only_construction_never_calls_mkdir_chmod_or_migrate(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr("pathlib.Path.mkdir", lambda self, *a, **k: calls.append(("mkdir", self)))
+    monkeypatch.setattr("pathlib.Path.chmod", lambda self, *a, **k: calls.append(("chmod", self)))
+    monkeypatch.setattr("opencode_swap.store.Registry.migrate", lambda self: calls.append(("migrate", self)))
+
+    switcher = read_only_switcher(tmp_path)
+
+    assert calls == []
+    assert switcher.read_only
+    assert switcher.secrets.read_only
+
+
+def test_read_only_missing_data_root_means_no_saved_accounts_and_creates_nothing(tmp_path):
+    switcher = read_only_switcher(tmp_path)
+
+    assert switcher.registry.scoped_accounts() == {}
+    with switcher.lock:
+        pass
+    assert switcher.current() == (None, None)
+    assert not switcher.data_root.exists()
+
+
+def test_read_only_reads_vault_and_leaves_it_byte_identical(tmp_path):
+    build_vault(tmp_path)
+    root = tmp_path / "opencode-swap"
+    before = vault_snapshot(root)
+    auth_before = (tmp_path / "opencode" / "auth.json").read_bytes()
+    switcher = read_only_switcher(tmp_path)
+
+    with switcher.lock:
+        assert set(switcher.registry.scoped_accounts()) == {("openai", "a"), ("openai", "b")}
+        assert switcher._load_record("openai", "a").raw["refresh"] == "ra"
+        assert switcher._load_record("openai", "a", confirmed=True).raw["refresh"] == "ra"
+    assert switcher.current()[0].name == "b"
+    assert switcher.account_status("a")[0] == Validity.OK
+
+    assert vault_snapshot(root) == before
+    assert (tmp_path / "opencode" / "auth.json").read_bytes() == auth_before
+    assert (root / ".lock").exists()  # the documented exception
+
+
+def test_read_only_account_status_never_syncs_a_rotated_live_record_back(tmp_path):
+    build_vault(tmp_path)
+    # OpenCode rotated b's tokens in place; a writable Switcher would sync
+    # this back into the vault on the next status read.
+    write_auth(tmp_path / "opencode" / "auth.json", oauth_entry(account_id="acct-b", refresh="rb-rotated"))
+    root = tmp_path / "opencode-swap"
+    before = vault_snapshot(root)
+    switcher = read_only_switcher(tmp_path)
+
+    validity, _desc = switcher.account_status("b")
+
+    assert validity == Validity.OK
+    assert vault_snapshot(root) == before
+
+
+def test_read_only_fetch_usage_never_spends_a_stored_refresh_token(tmp_path, monkeypatch):
+    writable = build_vault(tmp_path)
+    writable.secrets.put(
+        "openai:a",
+        json.dumps(oauth_entry(account_id="acct-a", refresh="expired-refresh", expires=int((time.time() - 3600) * 1000))),
+    )
+    root = tmp_path / "opencode-swap"
+    before = vault_snapshot(root)
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("a read-only Switcher must never refresh")
+
+    monkeypatch.setattr("opencode_swap.providers.openai.oauth_refresh.refresh_openai_oauth", fail_if_called)
+    monkeypatch.setattr("opencode_swap.switcher.usage.fetch_openai_oauth_usage", lambda access, account_id: "sentinel")
+    switcher = read_only_switcher(tmp_path)
+
+    switcher.fetch_usage("a")
+
+    assert vault_snapshot(root) == before
+
+
+def test_read_only_v1_registry_is_read_in_memory_without_backup(tmp_path):
+    build_vault(tmp_path)
+    root = tmp_path / "opencode-swap"
+    registry_path = root / "registry.json"
+    v2 = json.loads(registry_path.read_text())
+    v1 = {"version": 1, "active": "b", "accounts": v2["accounts"]["openai"]}
+    registry_path.write_text(json.dumps(v1))
+    before = vault_snapshot(root)
+    switcher = read_only_switcher(tmp_path)
+
+    assert set(switcher.registry.scoped_accounts()) == {("openai", "a"), ("openai", "b")}
+    assert switcher.registry.get_active("openai") == "b"
+    assert switcher.current()[0].name == "b"
+    assert vault_snapshot(root) == before
+    assert not (root / "registry.v1.json.bak").exists()
+
+
+@pytest.mark.parametrize(
+    "operation",
+    [
+        lambda s: s.add_account("c"),
+        lambda s: s.use_account("a"),
+        lambda s: s.remove_account("a"),
+        lambda s: s.rename_account("a", "c"),
+        lambda s: s.refresh_account("a"),
+        lambda s: s.restore("bak"),
+        lambda s: s.export_accounts(s.data_root.parent / "out.ocs", "password"),
+        lambda s: s.import_accounts(s.data_root.parent / "in.ocs", "password"),
+    ],
+    ids=["add", "use", "remove", "rename", "refresh", "restore", "export", "import"],
+)
+def test_read_only_mutating_operations_raise_and_change_nothing(tmp_path, operation):
+    build_vault(tmp_path)
+    root = tmp_path / "opencode-swap"
+    before = vault_snapshot(root)
+    auth_before = (tmp_path / "opencode" / "auth.json").read_bytes()
+    switcher = read_only_switcher(tmp_path)
+
+    with pytest.raises(OpenCodeSwapError, match="read-only"):
+        operation(switcher)
+
+    assert vault_snapshot(root) == before
+    assert (tmp_path / "opencode" / "auth.json").read_bytes() == auth_before
+    assert not (tmp_path / "out.ocs").exists()
+
+
+def test_read_only_switcher_refuses_a_writable_injected_store(tmp_path):
+    with pytest.raises(ValueError, match="read-only SecretStore"):
+        read_only_switcher(tmp_path, secret_store=SecretStore(tmp_path / "secrets", platform=Platform.UNKNOWN))
+
+
+def test_switcher_uses_an_injected_store(tmp_path):
+    build_vault(tmp_path)
+    store = SecretStore(tmp_path / "opencode-swap" / "secrets", platform=Platform.UNKNOWN, read_only=True)
+
+    switcher = read_only_switcher(tmp_path, secret_store=store)
+
+    assert switcher.secrets is store
+    assert switcher._load_record("openai", "a").raw["refresh"] == "ra"
+
+
+def test_writable_switcher_still_migrates_v1_registry_with_backup(tmp_path):
+    build_vault(tmp_path)
+    root = tmp_path / "opencode-swap"
+    registry_path = root / "registry.json"
+    v2 = json.loads(registry_path.read_text())
+    v1 = {"version": 1, "active": "b", "accounts": v2["accounts"]["openai"]}
+    registry_path.write_text(json.dumps(v1))
+
+    switcher = Switcher(tmp_path / "opencode" / "auth.json", root, platform=Platform.UNKNOWN)
+
+    assert not switcher.read_only
+    assert json.loads(registry_path.read_text()) == v2
+    assert json.loads((root / "registry.v1.json.bak").read_text()) == v1
+    assert stat.S_IMODE(root.stat().st_mode) == 0o700

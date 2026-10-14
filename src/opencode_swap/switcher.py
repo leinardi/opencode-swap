@@ -35,13 +35,15 @@ to OpenCode's own process.
 
 from __future__ import annotations
 
+import functools
 import json
 from collections.abc import Callable
 from contextlib import suppress
-from dataclasses import dataclass, field, replace
+from dataclasses import InitVar, dataclass, field, replace
 from datetime import UTC, datetime
 from enum import Enum, auto
 from pathlib import Path
+from typing import Concatenate
 
 from opencode_swap import backup, opencode_auth, paths, transfer, usage
 from opencode_swap.exceptions import AccountExistsError, AuthFileError, OpenCodeSwapError, RefreshError, SchemaError
@@ -61,6 +63,20 @@ from opencode_swap.models import (
 from opencode_swap.providers import get_provider
 from opencode_swap.providers.base import Provider
 from opencode_swap.store import Registry, SecretStore
+
+
+def _writable[**P, R](method: Callable[Concatenate[Switcher, P], R]) -> Callable[Concatenate[Switcher, P], R]:
+    """Refuse a vault-changing operation on a read-only Switcher up front,
+    before it can make any change (an `auth.json` swap, a backup, a spent
+    refresh token) that a later store write would then fail to complete."""
+
+    @functools.wraps(method)
+    def wrapper(self: Switcher, /, *args: P.args, **kwargs: P.kwargs) -> R:
+        if self.read_only:
+            raise OpenCodeSwapError("the vault is open read-only; refusing to change it")
+        return method(self, *args, **kwargs)
+
+    return wrapper
 
 
 def _secret_key(provider_id: str, name: str) -> str:
@@ -129,18 +145,36 @@ class AccountRefreshResult:
 
 @dataclass
 class Switcher:
+    """`read_only=True` opens the vault without changing it: no mkdir/chmod,
+    no registry migration, and a read-only SecretStore and Registry whose
+    writes raise. A missing data root then reads as "no saved accounts".
+    The lock is still taken by the operations that take it; `.lock` itself
+    is the one file read-only mode may create, inside an existing data root
+    only (see FileLock's `create_parent`)."""
+
     opencode_auth_path: Path
     data_root: Path
     platform: Platform | None = None  # override for tests; None = auto-detect
+    read_only: bool = False
+    secret_store: InitVar[SecretStore | None] = None  # injected store; None = built here
     registry: Registry = field(init=False)
     secrets: SecretStore = field(init=False)
     lock: FileLock = field(init=False)
 
-    def __post_init__(self) -> None:
+    def __post_init__(self, secret_store: SecretStore | None) -> None:
+        if self.read_only:
+            # The read-only store exists before anything else looks at the
+            # vault, so no code path can reach a writable one.
+            if secret_store is not None and not secret_store.read_only:
+                raise ValueError("a read-only Switcher needs a read-only SecretStore")
+            self.secrets = secret_store or SecretStore(self.data_root / "secrets", platform=self.platform, read_only=True)
+            self.registry = Registry(self.data_root / "registry.json", read_only=True)
+            self.lock = FileLock(self.data_root / ".lock", create_parent=False)
+            return
         self.data_root.mkdir(parents=True, exist_ok=True)
         self.data_root.chmod(0o700)
         self.registry = Registry(self.data_root / "registry.json")
-        self.secrets = SecretStore(self.data_root / "secrets", platform=self.platform)
+        self.secrets = secret_store or SecretStore(self.data_root / "secrets", platform=self.platform)
         self.lock = FileLock(self.data_root / ".lock")
         with self.lock:
             self.registry.migrate()
@@ -313,7 +347,7 @@ class Switcher:
             if live_record is not None:
                 key = _secret_key(provider_id, name)
                 stored = self.secrets.get(key)
-                if stored is None or json.loads(stored) != live_record.raw:
+                if not self.read_only and (stored is None or json.loads(stored) != live_record.raw):
                     self.secrets.put(key, json.dumps(live_record.raw))
                 return live_record, RefreshOutcome.LIVE
 
@@ -322,7 +356,9 @@ class Switcher:
                 return None
             if ambiguous:
                 return record, RefreshOutcome.AMBIGUOUS
-            if not allow_refresh or provider.validate(record) == Validity.OK:
+            # A read-only vault could not persist the rotated token, and the
+            # refresh would already have spent the stored single-use one.
+            if self.read_only or not allow_refresh or provider.validate(record) == Validity.OK:
                 return record, RefreshOutcome.RESOLVED
             refreshed = provider.refresh(record)
             if refreshed is None:
@@ -349,6 +385,7 @@ class Switcher:
         auth = opencode_auth.read_auth(self.opencode_auth_path)
         return self._provider(provider_id).extract(auth)
 
+    @_writable
     def add_account(self, name: str, provider_id: str = "openai") -> AccountMeta:
         provider_id = normalize_provider_id(provider_id)
         name = normalize_account_name(name)
@@ -425,6 +462,7 @@ class Switcher:
                 "live credential does not match the registry-active account; cannot safely determine which saved account to refresh before export"
             )
 
+    @_writable
     def export_accounts(self, path: Path, password: str) -> int:
         """Export every managed account into a password-encrypted archive."""
         with self.lock:
@@ -447,6 +485,7 @@ class Switcher:
             transfer.write_archive(path, entries, password)
             return len(entries)
 
+    @_writable
     def import_accounts(  # noqa: PLR0912, PLR0915
         self,
         path: Path,
@@ -576,6 +615,7 @@ class Switcher:
                 raise
             return len(selected)
 
+    @_writable
     def use_account(self, name: str, provider_id: str = "openai") -> AccountMeta:  # noqa: PLR0912, PLR0915
         """Switch OpenCode's active account to the saved account `name`.
 
@@ -675,6 +715,7 @@ class Switcher:
                 f"restore manually from {self.data_root / 'backups' / 'auth.json.bak'}"
             ) from None
 
+    @_writable
     def remove_account(self, name: str, provider_id: str = "openai") -> None:
         provider_id = normalize_provider_id(provider_id)
         name = normalize_account_name(name)
@@ -699,6 +740,7 @@ class Switcher:
                 self.registry.set_active(original_active, provider_id)
                 raise
 
+    @_writable
     def rename_account(self, old: str, new: str, provider_id: str = "openai") -> None:
         provider_id = normalize_provider_id(provider_id)
         old = normalize_account_name(old)
@@ -764,6 +806,7 @@ class Switcher:
                 active.append(meta)
         return active
 
+    @_writable
     def restore(self, source: str = "bak", *, discard_pending: bool = False) -> list[AccountMeta]:
         """Restore OpenCode's auth.json from a backup snapshot.
 
@@ -903,6 +946,7 @@ class Switcher:
         provider = self._provider(meta.provider)
         return provider.validate(record), provider.describe(record)
 
+    @_writable
     def refresh_account(self, name: str, provider_id: str = "openai") -> AccountRefreshResult:
         """Ensure a saved account's OAuth token is valid, refreshing it over
         the network and persisting the rotated token if it's expired.

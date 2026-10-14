@@ -21,14 +21,15 @@
 # SOFTWARE.
 
 import base64
+import json
 import stat
 
 import pytest
 
 from opencode_swap import macos_keychain
-from opencode_swap.exceptions import SecretStoreError
+from opencode_swap.exceptions import RegistryError, SecretStoreError
 from opencode_swap.models import Platform
-from opencode_swap.store import RecordLocation, SecretStore
+from opencode_swap.store import RecordLocation, Registry, SecretStore, convert_v1
 
 SECRET_VALUE = b"secret-value"
 
@@ -450,3 +451,166 @@ def test_record_location_reports_sealed_fallback_and_missing(tmp_path, mac_backe
     assert store.record_location("openai:sealed") is RecordLocation.SEALED
     assert store.record_location("openai:legacy") is RecordLocation.FILE_FALLBACK
     assert store.record_location("openai:missing") is RecordLocation.MISSING
+
+
+# --- read-only mode -------------------------------------------------------
+
+
+def snapshot(root):
+    """Every file under `root` as relative path -> bytes."""
+    return {str(path.relative_to(root)): path.read_bytes() for path in sorted(root.rglob("*")) if path.is_file()}
+
+
+@pytest.mark.parametrize("platform", [Platform.UNKNOWN, Platform.LINUX])
+def test_read_only_store_reads_file_secrets_without_changing_disk(tmp_path, platform):
+    SecretStore(tmp_path, platform=platform).put("openai:work", "secret-value")
+    before = snapshot(tmp_path)
+    store = SecretStore(tmp_path, platform=platform, read_only=True)
+
+    assert store.read_only
+    assert store.get("openai:work") == "secret-value"
+    assert store.get_confirmed("openai:work") == "secret-value"
+    assert store.get("openai:missing") is None
+    assert snapshot(tmp_path) == before
+
+
+def test_read_only_store_reads_legacy_fallback_without_deleting_it(tmp_path):
+    legacy = tmp_path / "openai_work.enc"
+    legacy.write_bytes(base64.b64encode(SECRET_VALUE))
+    store = SecretStore(tmp_path, platform=Platform.UNKNOWN, read_only=True)
+
+    assert store.get("openai:work") == "secret-value"
+    assert legacy.read_bytes() == base64.b64encode(SECRET_VALUE)
+
+
+@pytest.mark.parametrize(
+    ("operation", "args"),
+    [("put", ("openai:work", "other-value")), ("delete", ("openai:work",)), ("upgrade", ("openai:work",))],
+)
+def test_read_only_store_write_apis_raise_and_change_nothing(tmp_path, mac_backend, operation, args):
+    writable = SecretStore(tmp_path, platform=Platform.MACOS)
+    writable._put_file("openai:work", "secret-value")  # a v2 file that upgrade() would reseal
+    before = snapshot(tmp_path)
+    keychain_before = dict(mac_backend.data)
+    store = SecretStore(tmp_path, platform=Platform.MACOS, read_only=True)
+
+    with pytest.raises(SecretStoreError, match="read-only"):
+        getattr(store, operation)(*args)
+
+    assert snapshot(tmp_path) == before
+    assert mac_backend.data == keychain_before
+
+
+def test_read_only_store_put_into_missing_directory_creates_nothing(tmp_path):
+    secrets_dir = tmp_path / "secrets"
+    store = SecretStore(secrets_dir, platform=Platform.UNKNOWN, read_only=True)
+
+    with pytest.raises(SecretStoreError):
+        store.put("openai:work", "secret-value")
+
+    assert not secrets_dir.exists()
+
+
+@pytest.mark.parametrize("method", ["get", "get_confirmed"])
+def test_read_only_store_refuses_orphaned_sealed_file_and_keeps_it(tmp_path, mac_backend, method):
+    writable = SecretStore(tmp_path, platform=Platform.MACOS)
+    writable.put("openai:work", "secret-value")
+    writable._put_file("openai:work", "stale-fallback-value")  # an older fallback the orphan shadows
+    mac_backend.data.pop(("opencode-swap", "openai:work"))  # simulate a crash-orphaned file
+    before = snapshot(tmp_path)
+    store = SecretStore(tmp_path, platform=Platform.MACOS, read_only=True)
+
+    with pytest.raises(SecretStoreError, match="openai:work") as excinfo:
+        getattr(store, method)("openai:work")
+
+    assert "secret-value" not in str(excinfo.value)
+    assert "stale-fallback-value" not in str(excinfo.value)
+    assert snapshot(tmp_path) == before
+
+
+def test_writable_store_still_garbage_collects_orphaned_sealed_file(tmp_path, mac_backend):
+    store = SecretStore(tmp_path, platform=Platform.MACOS)
+    store.put("openai:work", "secret-value")
+    mac_backend.data.pop(("opencode-swap", "openai:work"))
+
+    assert not store.read_only
+    assert store.get("openai:work") is None
+    assert not store._sealed_file_path("openai:work").exists()
+
+
+V1_REGISTRY = {
+    "version": 1,
+    "active": "work",
+    "accounts": {
+        "work": {"provider": "openai", "type": "oauth", "accountId": "acct-1", "email": None, "added": "2026-01-01T00:00:00Z"},
+        "zai": {"provider": "zai-coding-plan", "type": "api", "accountId": "0000", "email": None, "added": "2026-01-02T00:00:00Z"},
+    },
+}
+
+
+def test_read_only_registry_decodes_v1_in_memory_and_stays_byte_identical(tmp_path):
+    path = tmp_path / "registry.json"
+    raw = json.dumps(V1_REGISTRY).encode()
+    path.write_bytes(raw)
+    registry = Registry(path, read_only=True)
+
+    assert set(registry.scoped_accounts()) == {("openai", "work"), ("zai-coding-plan", "zai")}
+    assert registry.get_active("openai") == "work"
+    assert registry.get_active("zai-coding-plan") is None
+    assert path.read_bytes() == raw
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["registry.json"]  # no v1 backup
+
+
+def test_read_only_registry_rejects_unsupported_version_like_migrate(tmp_path):
+    path = tmp_path / "registry.json"
+    path.write_text(json.dumps({"version": 1, "active": None, "accounts": {}, "extra": 1}))
+
+    with pytest.raises(RegistryError, match="unsupported registry version"):
+        Registry(path, read_only=True).scoped_accounts()
+
+
+def test_read_only_registry_writes_and_migrate_raise(tmp_path):
+    path = tmp_path / "registry.json"
+    raw = json.dumps(V1_REGISTRY).encode()
+    path.write_bytes(raw)
+    registry = Registry(path, read_only=True)
+    meta = registry.scoped_accounts()[("openai", "work")]
+
+    for write in (
+        registry.migrate,
+        lambda: registry.upsert_account(meta),
+        lambda: registry.set_active(None, "openai"),
+        lambda: registry.remove_account("work"),
+        lambda: registry.rename_account("work", "home"),
+    ):
+        with pytest.raises(RegistryError, match="read-only"):
+            write()
+    assert path.read_bytes() == raw
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["registry.json"]
+
+
+def test_read_only_registry_missing_file_is_empty_and_created_nowhere(tmp_path):
+    registry = Registry(tmp_path / "missing" / "registry.json", read_only=True)
+
+    assert registry.scoped_accounts() == {}
+    assert not (tmp_path / "missing").exists()
+
+
+def test_convert_v1_is_pure_and_matches_migrate(tmp_path):
+    path = tmp_path / "registry.json"
+    path.write_text(json.dumps(V1_REGISTRY))
+    before = path.read_bytes()
+
+    converted = convert_v1(json.loads(before), path)
+
+    assert path.read_bytes() == before
+    assert Registry(path).migrate()
+    assert json.loads(path.read_text()) == converted
+    assert converted == {
+        "version": 2,
+        "active": {"openai": "work"},
+        "accounts": {
+            "openai": {"work": V1_REGISTRY["accounts"]["work"]},
+            "zai-coding-plan": {"zai": V1_REGISTRY["accounts"]["zai"]},
+        },
+    }

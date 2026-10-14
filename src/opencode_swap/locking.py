@@ -45,15 +45,21 @@ from opencode_swap.exceptions import LockError
 
 
 class FileLock:
-    def __init__(self, lock_path: Path, timeout: float = 10.0):
+    def __init__(self, lock_path: Path, timeout: float = 10.0, *, create_parent: bool = True):
         self.lock_path = lock_path
         self.timeout = timeout
+        # A read-only reader of a vault that does not exist yet has nothing to
+        # serialize against, and creating the directory just to lock it would
+        # be the very write read-only mode promises not to make.
+        self._create_parent = create_parent
         self._lock_file: IO[str] | None = None
         self._locked = False
 
     def acquire(self, timeout: float | None = None) -> bool:
         if timeout is None:
             timeout = self.timeout
+        if not self._create_parent and not self.lock_path.parent.is_dir():
+            return True
         self.lock_path.parent.mkdir(parents=True, exist_ok=True)
         lock_file = open(self.lock_path, "w")  # noqa: SIM115
         self._lock_file = lock_file
