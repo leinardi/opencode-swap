@@ -361,6 +361,52 @@ From the `@opencode/plugin` 2.0.x tarballs (`dist/tui/context.d.ts`) and `@openc
 Every account was present exactly once in every state, and the vault's files were
 byte-identical before and after.
 
+## Plugin end to end
+
+The rewritten plugin, packed and published to the local verdaccio as `1.0.0-e2e.1`, listed in
+`cli.json` `"plugins"` next to the event-logging probe. Credentials were fake and imported with
+`auth import --standalone`: two OpenAI OAuth entries (`work`, `home`) whose access tokens are
+unsigned JWTs with made-up emails, and two z.ai keys (`team`, `solo`).
+
+| Check | 2.0.29 | 2.0.20 |
+| --- | --- | --- |
+| Plugin loads; footer hidden for the free OpenCode model (no stored credential) | yes | yes |
+| After `/models` → an OpenAI model, footer reads `work · n/a` (fake token refused) | yes | yes |
+| `/swap` lists `home home@example.com · n/a`, `work work@example.com · active`, `solo …bbbb · n/a`, `team …aaaa · active`, grouped by integration | yes | yes |
+| Picking `home`, confirming: toast "openai now uses home.", footer `home · n/a`, probe logged `credential.switched {openai, cred_…home…}`, prompt model unchanged | yes | yes |
+| `/swap-next` confirms "Use work for openai?", switches back, `credential.switched` logged | yes | yes |
+| `/swap-refresh` toasts "Accounts and usage refreshed." | yes | yes |
+| A GLM model moves the footer to `team · n/a` | yes | not run |
+| No planted token, key or JWT payload in the tmux capture or `opencode.log` | yes | yes |
+| `oc2-sandbox.sh check` afterwards | passed | passed |
+
+- **The packaging guards, each broken once** on a scratch copy of the package, all failed as
+  intended:
+
+  | Break | Guard | Failure |
+  | --- | --- | --- |
+  | `exports["./tui"]` pointing at `./src/tui.tsx` | `check-tui-entry-compiled.sh` | "entry must be compiled .js" |
+  | an added `"."` export | `check-tui-entry-compiled.sh` | "package.json exports must be exactly ./tui" |
+  | `import { Effect } from "effect"` appended to `dist/state.js` | `check-tui-entry-compiled.sh` | "runtime import of effect or @opencode/*" |
+  | `import … from "@opencode/plugin/tui"` appended to `dist/usage/zai.js` | `check-tui-entry-compiled.sh` | "runtime import of effect or @opencode/*" |
+  | a `jsx-runtime` import appended to `dist/footer.js` | `check-tui-entry-compiled.sh` | "use the generic JSX runtime" |
+  | the default export's `setup` renamed | `check-tui-entry-compiled.sh` | "must have a string id and a function setup" |
+  | `"./bands.js"` turned into `"./bands"` in `dist/state.js` | `check-tui-entry-compiled.sh` | "relative imports above lack their .js extension" |
+  | a required `solid-js` `1.8.x` peer next to `@opentui/solid` 0.5.17 (which pins `solid-js` 1.9.12) | `check-npm-resolution.sh` | `ERESOLVE: unable to resolve dependency tree` |
+
+  Bun resolves an extensionless relative import on its own, which is why the last
+  `check-tui-entry-compiled.sh` row needed its own grep rather than the import of the entry.
+- **The footer's first lookup.** A second build (`1.0.0-e2e.2`) looks usage up as soon as a
+  footer mounts, not only when its integration changes: home and every session render their own
+  prompt, so navigating mounts a fresh footer. On 2.0.29 it showed `work · n/a` right after the
+  model switch, with no planted value in the capture or the log.
+- **2.0.17** (no `credential.list`): one toast "opencode-swap needs OpenCode 2.0.20 or later.",
+  and `/swap` found "No matching commands".
+- **OpenCode 1.19** with `@leinardi/opencode-swap@1.0.0-e2e.1` in `tui.json`: the package was
+  installed into the plugin cache but never registered a command, the `engines.opencode` gate of
+  V13. With `@leinardi/opencode-swap@0.4` it resolved 0.4.6 and offered `/swap`, `/swap-next`
+  and `/swap-refresh`.
+
 ## Deviations and open items
 
 Deviations from the plan, each with its evidence above:
@@ -386,11 +432,16 @@ Deviations from the plan, each with its evidence above:
   and expires 5 s (the list timeout) early. With exactly 60 s, a poll whose list ran faster than
   the previous one would still find the previous result fresh, and the footer would refresh only
   every other poll.
-- **`src/bands.ts` is a copy until the rewrite.** The plan moves the band logic out of
-  `src/tui.tsx`. The 0.4.x build compiles `src/tui.tsx` alone into `dist/tui.js`
-  (`scripts/build.ts`), so an import of `./bands` from it would ship a broken package. The
-  TypeScript ports therefore leave `src/tui.tsx` untouched, and the old copy goes with the
-  rewrite's per-file build.
+- **`src/bands.ts` was a copy until the rewrite.** The 0.4.x build compiled `src/tui.tsx` alone
+  into `dist/tui.js`, so the TypeScript ports left it untouched; the rewrite replaced it and its
+  copy of the band logic.
+- **The plugin is typechecked against `@opencode/plugin` and `@opencode/theme` 2.0.20**, the F6
+  minimum, so a member newer than that fails `tsc`.
+- **`engines` lists only `opencode`.** The old `node` entry is gone: the plugin runs in
+  OpenCode's Bun runtime.
+- **`sessionStatus` carries the session's integration as well as its run state.** `/swap-next`
+  and the footer poll need the current integration (the F4 chain plus the provider list), and
+  the confirm text notes a request in progress.
 - **The TypeScript usage lookups differ from `usage.py` in three ways.**
   - Every failure message is fixed text. `usage.py` printed a network error's own message, which
     the plugin never does.
@@ -418,3 +469,9 @@ Open items for the human checklist:
 - **`credential.updated` without a payload** means the plugin cannot tell which integration a
   label change touched. It re-lists credentials on every update event, which is cheap; confirm
   it causes no visible flicker.
+- **A stale `context.client` after a reconnect (V7).** The plugin cannot reach the replacement
+  client. A list that never settles times out after 5 s and shows as an error rather than
+  blocking the plugin, but a reconnect during a session should be tried with a real service
+  restart.
+- **Real usage numbers** were not seen in the sandbox: fake tokens only ever produce `n/a`.
+  Check the footer's windows and pace colours with a real OpenAI and z.ai account.

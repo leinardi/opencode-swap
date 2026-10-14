@@ -1,7 +1,7 @@
 {
   "name": "@leinardi/opencode-swap",
   "version": "0.4.6",
-  "description": "OpenCode TUI account switcher for opencode-swap",
+  "description": "OpenCode 2 TUI plugin: active account and usage in the prompt footer, and one-step account switching",
   "type": "module",
   "license": "MIT",
   "author": "Roberto Leinardi",
@@ -31,8 +31,7 @@
     "prepublishOnly": "bun run build && bun run check"
   },
   "files": [
-    "dist/tui.js",
-    "src/tui.tsx",
+    "dist/",
     "README.md",
     "LICENSE"
   ],
@@ -40,23 +39,31 @@
     "./tui": "./dist/tui.js"
   },
   "engines": {
-    "node": ">=20",
-    "opencode": "^1.18.0"
+    "opencode": ">=2.0.20 <3"
   },
   "publishConfig": {
     "access": "public"
   },
   "peerDependencies": {
-    "@opencode-ai/plugin": "^1.18.0",
     "@opentui/core": "0.5.x",
-    "@opentui/keymap": "0.5.x",
     "@opentui/solid": "0.5.x",
     "solid-js": "1.9.x"
   },
+  "peerDependenciesMeta": {
+    "@opentui/core": {
+      "optional": true
+    },
+    "@opentui/solid": {
+      "optional": true
+    },
+    "solid-js": {
+      "optional": true
+    }
+  },
   "devDependencies": {
-    "@opencode-ai/plugin": "1.19.0",
+    "@opencode/plugin": "2.0.20",
+    "@opencode/theme": "2.0.20",
     "@opentui/core": "0.5.17",
-    "@opentui/keymap": "0.5.17",
     "@opentui/solid": "0.5.17",
     "@tsconfig/bun": "1.0.11",
     "@types/bun": "1.4.2",

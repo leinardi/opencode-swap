@@ -187,6 +187,18 @@ export function nextAccount(accounts: readonly AccountView[], integrationID: str
   return candidates[(current + 1) % candidates.length];
 }
 
+// What the footer shows for an integration: its active stored credential,
+// unless an env var is the active connection (V8) and the stored label would
+// name the wrong credential.
+export function footerAccount(
+  accounts: readonly AccountView[],
+  integrationID: string | undefined,
+  envActive: boolean
+): AccountView | undefined {
+  if (!integrationID || envActive) return undefined;
+  return accounts.find((account) => account.integrationID === integrationID && account.active);
+}
+
 // A provider's integration is `integrationID ?? id` (OpenCode's
 // model-resolver.ts:376-378). It must come from the provider list rather than
 // be assumed equal: the Console's providers all map to "opencode" (V8). An

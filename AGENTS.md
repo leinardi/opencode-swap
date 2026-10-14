@@ -32,50 +32,44 @@ Read these two first — most "obvious" changes wrong without context:
 
 ## Core invariants — do not violate
 
-- **auth.json writes always atomic.** Temp file same dir, `chmod 0600`, then
-  `os.replace`. Never write OpenCode's `auth.json` (or any file under
-  opencode-swap's own data dir) other way. See `atomic.py`.
-- **Never silently guess unrecognized schema.** Provider record doesn't
-  match known shape → raise `SchemaError`, refuse — don't drop fields,
-  don't coerce, don't proceed. OpenCode itself lenient here (silently drops
-  bad entries); this project deliberately stricter, about to overwrite
-  state. Real bug happened: `Switcher.current()` caught `SchemaError` via
-  too-broad `except OpenCodeSwapError`, reported "no active account" instead
-  of surfacing incompatibility — caught by tests, now regression-tested.
-  Watch same bug class: catching specific exception's *base class* where
-  should only catch specific case.
-- **Never lose live credential without preserving first.** Before
-  `use_account` overwrites live provider entry, either syncs managed
-  account's rotated tokens back into storage, or stashes
-  unmanaged/foreign login under `backups/unclaimed-*.json`. Don't add code
-  path overwriting `auth.json` skipping this.
-- **Secrets never touch non-secret registry.** `registry.json` holds only
-  name/provider/type/account id/email/timestamp/active hints. Access tokens, refresh
-  tokens, API keys only through `SecretStore` (macOS Keychain/private file). About
-  to put token-shaped string into `registry.py` or `models.AccountMeta`?
-  Stop. One bounded exception: for a static-key account (which has no
-  account id) the `account_id` slot holds the API key's **last 4 characters**
-  as a "which key is this" hint — see `providers.common.key_account_hint`,
-  matching what providers show on their own key dashboards. 4 trailing chars
-  of a high-entropy key is not the credential; anything longer or
-  reconstructible is.
-- **No secrets in CLI output, logs, error messages.** `cli.py` truncates
-  account ids to last 4 chars (and shows only a key's last 4 for static-key
-  accounts, per the exception above), never prints token fields. Anything
-  added to CLI output needs same discipline — tests grep stdout/stderr for
-  planted secret values.
-- **No custom cryptography.** Security model = macOS Keychain first with
-  `chmod 0600` obfuscated files as sticky fallback; Linux always uses those
-  private files — matches (not exceeds)
-  OpenCode's own trust boundary. Don't add encryption, key derivation,
-  "vault" — see `docs/security.md`, deliberate choice not oversight.
-- **Every mutating `Switcher` op holds `self.lock`.** Serializes
-  opencode-swap's own concurrent invocations. No relation to OpenCode's own
-  process — no cooperative lock protocol to join (OpenCode's own
-  `auth.json` writes unlocked, non-atomic; see `docs/opencode-auth.md`).
-  Don't assume lock protects against concurrently-running OpenCode;
-  `process_detection.py` + confirmation prompt = best-effort advisory
-  mitigation instead.
+These govern the OpenCode 2 TUI plugin (`integrations/opencode-tui-plugin`). The Python CLI is
+frozen at 0.4.x and leaves the repo; until then its own rules stay in `docs/architecture.md` and
+`docs/security.md`. OpenCode 2 behavior cited here is in `docs/opencode-v2-integration.md`.
+
+- **No secrets in UI, logs, errors or storage.** Credential values (access and refresh tokens,
+  API keys) never reach exposed state, toasts, dialog text, the footer, thrown messages or any
+  log. Only `AccountView` (`src/accounts.ts`) reaches UI state; a value goes from a fresh
+  `credential.list()` straight to the one usage request that needs it (`usageRequest`), and the
+  revision tracker keeps a digest, never the value. Usage failures are fixed text, never an
+  exception message, header or response body (`src/usage/http.ts`). The one shown fragment is a
+  static key's last 4 characters (`…abcd`, keys of 20+ characters only). No `console.*`
+  anywhere (ESLint `no-console`). Tests plant token values and grep for them.
+- **Only `credential.activate`.** The plugin switches which stored credential is active, and
+  nothing else: never `credential.create`, `update` or `remove`, never a token refresh, never a
+  token endpoint, never `storage.store`/`storage.memory` (ESLint `no-restricted-syntax`). It
+  never changes the session's model.
+- **No OpenCode DB or file access.** Everything goes through the plugin context (`client`,
+  `data`, `ui`). Never open `opencode.db`, `auth.json` or anything under OpenCode's data dirs.
+- **Network only to the two usage endpoints, with that account's own credential.**
+  `chatgpt.com/backend-api/wham/usage` for OpenAI OAuth, `api.z.ai/.../quota/limit` for z.ai
+  keys; redirects are not followed. The `usage` option set to false sends nothing at all.
+- **Type-only `effect` and `@opencode/*`.** OpenCode 2 refuses a plugin-local copy of its
+  runtime packages; import their types only (ESLint `no-restricted-imports` with
+  `allowTypeImports`, and `scripts/check-tui-entry-compiled.sh` on the packed payload).
+- **`./tui`-only, precompiled output.** `exports` is exactly `{"./tui": "./dist/tui.js"}` (a `"."`
+  export makes OpenCode register a server plugin), `files` is `dist/`, and every file is
+  Solid's universal-renderer output from `scripts/build.ts`; raw JSX from npm renders without
+  reactivity. `check-tui-entry-compiled.sh` and `check-npm-resolution.sh` guard the payload.
+- **Unknown shapes are never coerced.** A credential value short of OpenCode's schema is
+  `kind: "unknown"`: listed and switchable by label, with no email and no usage (F7). A response
+  of an unexpected shape is "unexpected response shape", not a guess. A context missing any
+  member the plugin calls registers nothing and shows one toast naming the minimum OpenCode
+  (`src/features.ts`).
+- **Late async results are never applied.** Every usage request is owned by its credential's
+  generation and `credentialID#revision` key, and aborted when a switch or update event, a
+  revision change or dispose supersedes it (`src/state.ts`). Nothing runs after dispose. The
+  displayed active account changes only from a fresh list or the `credential.switched` event,
+  never optimistically.
 
 ## Testing rules
 

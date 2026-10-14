@@ -24,6 +24,7 @@
 
 import { describe, expect, test } from "bun:test";
 import {
+  footerAccount,
   nextAccount,
   projectAccounts,
   resolveIntegration,
@@ -222,5 +223,24 @@ describe("usageRequest", () => {
   test("has no request for an ineligible or unknown credential", () => {
     expect(usageRequest(entry("c", "deepseek", "a", { type: "key", key: KEY }))).toBeUndefined();
     expect(usageRequest(entry("c", "openai", "a", { type: "future" }))).toBeUndefined();
+  });
+});
+
+describe("footerAccount", () => {
+  const accounts: AccountView[] = [
+    { id: "a", integrationID: "openai", label: "work", active: true, kind: "oauth" },
+    { id: "b", integrationID: "openai", label: "home", active: false, kind: "oauth" },
+    { id: "c", integrationID: "zai-coding-plan", label: "team", active: false, kind: "key" }
+  ];
+
+  test("is the integration's active stored credential", () => {
+    expect(footerAccount(accounts, "openai", false)?.id).toBe("a");
+  });
+
+  test("is hidden with no active stored credential, no integration, or an active env connection", () => {
+    expect(footerAccount(accounts, "zai-coding-plan", false)).toBeUndefined();
+    expect(footerAccount(accounts, "deepseek", false)).toBeUndefined();
+    expect(footerAccount(accounts, undefined, false)).toBeUndefined();
+    expect(footerAccount(accounts, "openai", true)).toBeUndefined();
   });
 });
