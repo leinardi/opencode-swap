@@ -54,9 +54,9 @@
   },
   "devDependencies": {
     "@opencode-ai/plugin": "1.19.0",
-    "@opentui/core": "0.6.0",
-    "@opentui/keymap": "0.6.0",
-    "@opentui/solid": "0.6.0",
+    "@opentui/core": "0.5.17",
+    "@opentui/keymap": "0.5.17",
+    "@opentui/solid": "0.5.17",
     "@tsconfig/bun": "1.0.11",
     "@types/bun": "1.4.2",
     "eslint": "10.12.0",
