@@ -19,30 +19,18 @@ without taking ownership of credentials or swaps.
 
 ![Account switching from the TUI command palette](https://raw.githubusercontent.com/leinardi/opencode-swap/main/integrations/opencode-tui-plugin/assets/command.gif)
 
-> **OpenCode 2 and the end of the CLI.** OpenCode 2 stores several accounts per provider
-> itself and no longer reads `auth.json`, so this CLI only works with OpenCode 1.x. 0.4.7 is
-> its last release: it adds [`migrate-to-opencode2`](#moving-to-opencode-2) to move your
-> saved accounts into OpenCode 2, and receives no further changes. From 1.0.0,
-> `@leinardi/opencode-swap` is an OpenCode 2 TUI plugin only; OpenCode 1.x users keep the
-> plugin on `@leinardi/opencode-swap@0.4`.
+> **opencode-swap is discontinued.** OpenCode 2 stores several accounts per provider itself
+> and switches between them (`/connect`, `opencode auth switch`), and it no longer reads
+> `auth.json`, so this CLI only works with OpenCode 1.x. 0.4.7 is the last release: it adds
+> [`migrate-to-opencode2`](#moving-to-opencode-2) to move your saved accounts into OpenCode 2.
+> For quota in OpenCode 2, see
+> [`@slkiser/opencode-quota`](https://github.com/slkiser/opencode-quota). The npm package's
+> 1.x line is only a notice that tells OpenCode 2 users to remove it.
 
 ## Status
 
-Early. Core behavior is covered by automated tests and has been exercised
-against a real OpenCode installation. See
-[`docs/roadmap.md`](https://github.com/leinardi/opencode-swap/blob/main/docs/roadmap.md)
-for what's done and what's left.
-
-⚠️ **OpenAI is the only provider tested end to end with real accounts.** Other
-provider implementations were derived from OpenCode source and synthetic tests.
-Maintainer does not have accounts for those services, so testers are wanted for
-every non-OpenAI provider.
-
-> 🧪 **Testers wanted.** If you use any non-OpenAI provider, please open an
-> issue with the provider, auth method, OpenCode version, and sanitized failure
-> details. **Never include credentials.**
-> [`docs/provider-research-prompt.md`](https://github.com/leinardi/opencode-swap/blob/main/docs/provider-research-prompt.md)
-> has a copy-paste OpenCode prompt that gathers safe source evidence for one provider.
+Discontinued. 0.4.7 is the final release of the CLI and of the OpenCode 1 TUI plugin; no
+further fixes are planned. It still works with OpenCode 1.x as described below.
 
 🤖 This project is built largely with agentic AI coding tools, under human
 review. Read the code before trusting it with your credentials.
@@ -57,6 +45,15 @@ if you go back.
 # Quit OpenCode 1 first, then, with OpenCode 2.0.20 or newer installed:
 opencode-swap migrate-to-opencode2 | opencode auth import
 ```
+
+> ⚠️ **Remove the TUI plugin before OpenCode 2 first starts.** OpenCode 2 copies OpenCode 1's
+> `tui.json` plugins into its new `cli.json`, turning `"plugin_enabled": {"opencode-swap": true}`
+> into a bare `"opencode-swap"` entry. The 0.4.x plugin never loads on OpenCode 2, and when it
+> fails, OpenCode 2 installs `opencode-swap` from npm, **an unrelated package**, and runs it.
+> Delete `@leinardi/opencode-swap` from `"plugin"` and `opencode-swap` from `"plugin_enabled"`
+> in `~/.config/opencode/tui.json` first. If `~/.config/opencode/cli.json` already exists,
+> remove both entries from its `"plugins"`. `migrate-to-opencode2` warns when either file still
+> lists the plugin.
 
 - **Each saved account becomes one OpenCode 2 credential**, labelled with its name. The
   provider's active account stays active, unless OpenCode 2 already has a credential for
@@ -82,6 +79,20 @@ After importing, switch accounts in OpenCode 2 (`/connect`, or `opencode auth sw
 spends the other's copy. OpenCode 1 logins that are not saved accounts are not exported; the
 command names them so you can log in again in OpenCode 2. `wellknown` logins are not migrated
 either.
+
+What replaces each part of opencode-swap in OpenCode 2:
+
+| opencode-swap 0.4.x | OpenCode 2 |
+| --- | --- |
+| `add`, `remove`, `rename` | `/connect`, `opencode auth login`, `opencode auth logout` |
+| `use`, `switch` | `/connect`, `opencode auth switch` |
+| `list`, `current`, `status` | `opencode auth list` |
+| `export`, `import` | `opencode auth export`, `opencode auth import` |
+| `list --usage`, the TUI plugin's usage | [`@slkiser/opencode-quota`](https://github.com/slkiser/opencode-quota) (`/quota`, sidebar, prompt footer) |
+
+Once everything works in OpenCode 2, remove the saved accounts with
+`opencode-swap remove <provider> <name>`, which also clears their macOS Keychain entries, then
+uninstall the CLI (`uv tool uninstall opencode-swap` or `pipx uninstall opencode-swap`).
 
 ## Looking for load balancing?
 
@@ -116,8 +127,8 @@ Adds the active account and its usage to the session prompt, plus `/swap`,
 opencode plugin @leinardi/opencode-swap@0.4 --global
 ```
 
-Keep the `@0.4` pin: from 1.0.0 the package is an OpenCode 2 plugin, which OpenCode 1.x
-rejects.
+Keep the `@0.4` pin: 1.x of the package is only a discontinuation notice for OpenCode 2,
+which OpenCode 1.x refuses to load.
 
 Restart OpenCode afterwards. The plugin invokes `opencode-swap` from your
 `PATH`, so it needs the CLI from step 1 already installed. See

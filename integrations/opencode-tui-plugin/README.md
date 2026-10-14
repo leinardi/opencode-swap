@@ -24,9 +24,10 @@ opencode plugin @leinardi/opencode-swap@0.4 --global
 
 Restart OpenCode. The plugin invokes `opencode-swap` from `PATH`.
 
-Keep the `@0.4` pin on OpenCode 1.x. OpenCode 1 resolves a bare package name to `@latest`, and
-from 1.0.0 the package is an OpenCode 2 plugin (`"engines": {"opencode": ">=2.0.20 <3"}`) that
-OpenCode 1 refuses to load. Moving to OpenCode 2? See
+opencode-swap is discontinued, and 0.4.7 is the plugin's last release. Keep the `@0.4` pin on
+OpenCode 1.x: OpenCode 1 resolves a bare package name to `@latest`, and 1.x of the package is only
+a discontinuation notice for OpenCode 2 that OpenCode 1 refuses to load. Moving to OpenCode 2?
+Remove this plugin from `tui.json` first; see
 [Moving to OpenCode 2](https://github.com/leinardi/opencode-swap#moving-to-opencode-2).
 
 ## Install from this checkout
