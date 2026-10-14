@@ -56,6 +56,11 @@ updates:
       # breaking the lint hook. Drop this once typescript-eslint widens its range.
       - dependency-name: "typescript"
         versions: [">=6.1.0"]
+      # The published peers pin @opentui to 0.5.x (26562a3); building and
+      # typechecking against 0.6 would ship output the peer range never tested.
+      # Move the peers and these together, by hand, when moving to 0.6.
+      - dependency-name: "@opentui/*"
+        versions: [">=0.6.0"]
     groups:
       tui-plugin-dependencies:
         patterns:

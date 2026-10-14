@@ -53,17 +53,17 @@
     "solid-js": "1.9.x"
   },
   "devDependencies": {
-    "@opencode-ai/plugin": "1.18.32",
-    "@opentui/core": "0.5.12",
-    "@opentui/keymap": "0.5.12",
-    "@opentui/solid": "0.5.12",
+    "@opencode-ai/plugin": "1.19.0",
+    "@opentui/core": "0.5.17",
+    "@opentui/keymap": "0.5.17",
+    "@opentui/solid": "0.5.17",
     "@tsconfig/bun": "1.0.11",
     "@types/bun": "1.4.2",
-    "eslint": "10.11.0",
-    "eslint-plugin-solid": "0.18.0",
+    "eslint": "10.12.0",
+    "eslint-plugin-solid": "0.18.1",
     "jiti": "2.7.0",
-    "solid-js": "1.9.15",
+    "solid-js": "1.9.17",
     "typescript": "6.0.3",
-    "typescript-eslint": "8.70.1"
+    "typescript-eslint": "8.71.1"
   }
 }
