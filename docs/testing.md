@@ -92,7 +92,19 @@ sandbox, so no real configuration, credential or provider key is seen; its heade
 each command. Use fake credentials only (`opencode auth import --standalone` of JWT-shaped
 fakes), and run `check` at the end.
 
-To load a build of the plugin, publish it to a local registry and point the sandbox at it:
+To load the checkout's build, list a directory holding a one-line `tui.js` in `cli.json`
+`"plugins"`. OpenCode reads a local directory's `<dir>/tui`, not its `package.json`
+`exports`, so listing the repository root loads nothing:
+
+```bash
+make plugin-build
+mkdir -p .cache/dev-plugin   # git-ignored
+printf 'export { default } from "%s/dist/tui.js";\n' "$PWD" > .cache/dev-plugin/tui.js
+```
+
+Then list `<repo>/.cache/dev-plugin` in the sandbox's `cli.json`; after a change, rebuild and
+restart the TUI. To load the packed package instead, publish it to a local registry and point
+the sandbox at it:
 `npx verdaccio` in a scratch directory, `npm publish --registry http://127.0.0.1:4873/` of a
 prerelease version, `OC_SANDBOX_REGISTRY=http://127.0.0.1:4873/`, then list the package in the
 sandbox's `cli.json` `"plugins"`. The end-to-end runs recorded in

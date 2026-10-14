@@ -168,7 +168,14 @@ opencode-swap migrate-to-opencode2 | opencode auth import
 
 The CLI's own README on PyPI (`opencode-swap` 0.4.7) has the details and every option. Then:
 
-1. [Install](#install) this plugin in OpenCode 2.
+1. Before OpenCode 2's TUI first starts, fix its plugin list. On its first start OpenCode 2
+   copies OpenCode 1's `tui.json` plugins into `~/.config/opencode/cli.json`, and turns the old
+   plugin's `plugin_enabled` flag into a bare `"opencode-swap"` entry. If the 0.4.x plugin then
+   fails to load, OpenCode 2 installs that name from npm, where `opencode-swap` is **an
+   unrelated package**. Make `"plugins"` list `@leinardi/opencode-swap` and no other
+   `opencode-swap` entry: run `opencode plugin add @leinardi/opencode-swap` (which creates
+   `cli.json` from your OpenCode 1 settings), then remove `"opencode-swap"` and any
+   `@leinardi/opencode-swap@0.4` from it.
 2. Switch accounts in OpenCode 2 from then on, not with the 0.4.x CLI. The vault and OpenCode 2
    now hold the same refresh tokens, and a refresh by either side spends the other's copy.
 3. Once everything works in OpenCode 2, remove the saved accounts with

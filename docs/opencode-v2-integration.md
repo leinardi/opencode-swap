@@ -180,6 +180,11 @@ characters from `0-9A-Za-z` (`packages/schema/src/identifier.ts:3-31`).
   `/tmp/oc2-spike/probe-local` (a raw `tui.tsx`, not precompiled), listed directly in `cli.json`
   `"plugins"`, loaded next to the npm probe, and its footer counter advanced every second. It
   has to be added to `cli.json` by hand, since `plugin add` rejects it.
+- **A local directory's `package.json` is not read.** Without a package name, `Host.resolve`
+  looks for the plain path `<dir>/tui` (`packages/plugin/src/host.ts:19-24`), so `exports` is
+  ignored. Listing this repository's root in the sandbox's `cli.json` loaded nothing (`/swap`:
+  "No matching commands"). A directory holding only a `tui.js` that re-exports the root's
+  `dist/tui.js` loaded, and `/swap` listed the fake accounts.
 - **Installation.** Arborist `reify` with the user's npm config, `audit: false` and
   `ignoreScripts: true`, without `legacyPeerDeps` (`packages/util/src/npm.ts:209-242`). The cache
   is `<XDG_CACHE_HOME>/opencode/npm/<name>@<spec>/<generation>/` (`npm.ts:141,302,320`).
@@ -433,6 +438,41 @@ then against a follow-up commit bumping the version.
 On `main` the move lands in a merge commit whose first parent still has the plugin under
 `integrations/`, so the same check applies there: the move tags and publishes nothing.
 
+## On a real installation
+
+On 2026-10-14 the maintainer's machine moved from OpenCode 1.19.0 to 2.0.29 with real accounts,
+at the maintainer's request, after a backup of every OpenCode and opencode-swap directory:
+OpenCode's own installer (`install --version 2.0.29 --no-modify-path`), `migrate-to-opencode2`
+run from this branch's history, then the plugin's build through a local wrapper directory.
+Nothing below quotes a credential.
+
+- **The migration matched the sandbox.** OpenCode 2's first start (the migration's `auth export`)
+  imported OpenCode 1's two live logins, labelled `OAuth` (openai) and `API key`
+  (zai-coding-plan), plus an `opencode` API key. `migrate-to-opencode2` reported both live
+  accounts "already in OpenCode 2" and exported the third saved account, which `auth import`
+  added.
+- **Real usage renders.** With an OpenAI model selected, the footer read
+  `OAuth · 5h 0% @Oct 15, 03:09 | 7d 2% @Oct 21, 14:10` for the legacy-imported credential (a
+  `chatgpt-browser` one, as imported legacy OpenAI credentials keep that method, V12). The
+  migrated account, whose access token had expired in the vault, showed `n/a`, as designed: the
+  plugin never refreshes a token.
+- **Neither OpenAI token carried an email claim**, so both OpenAI rows in `/swap` had no
+  description. The legacy-imported one is labelled only `OAuth`.
+- **OpenCode 2 turns OpenCode 1's `tui.json` into `cli.json`**, once, on its first config load,
+  and only while `cli.json` does not exist (`packages/cli/src/config/migrate.ts:37,100-117`). It
+  carries over the theme and display settings from `tui.json` and `kv.json`, and the plugins:
+  every `plugin` entry, and every `plugin_enabled` id as a bare entry (`:160-166`). This
+  machine's `tui.json` (`"plugin": ["@leinardi/opencode-swap"]`, `"plugin_enabled":
+  {"opencode-swap": true}`) became `"plugins": ["@leinardi/opencode-swap", "opencode-swap"]`.
+- **A migrated `"opencode-swap"` entry can install someone else's package.** The TUI handles
+  `plugins` in order; a bare name only enables an already resolved plugin whose id matches, and
+  otherwise is resolved and installed as an npm spec (`packages/tui/src/plugin/context.tsx:318-350`).
+  npm has an unrelated `opencode-swap` package (0.1.3). Whenever `@leinardi/opencode-swap` fails
+  to load first (the 0.4.x build does, with "Invalid V2 TUI plugin module", V4/V5), that package
+  would be installed and run in the TUI. Here the entries were replaced before the TUI first
+  started, and OpenCode 2's plugin cache (`~/.cache/opencode/npm`) did not exist afterwards, so
+  nothing was installed.
+
 ## Deviations and open items
 
 Deviations from the plan, each with its evidence above:
@@ -506,8 +546,19 @@ Open items for the human checklist:
   client. A list that never settles times out after 5 s and shows as an error rather than
   blocking the plugin, but a reconnect during a session should be tried with a real service
   restart.
-- **Real usage numbers** were not seen in the sandbox: fake tokens only ever produce `n/a`.
-  Check the footer's windows and pace colours with a real OpenAI and z.ai account.
+- **Real usage numbers:** seen for a legacy-imported OpenAI credential (On a real
+  installation). Still to see: z.ai, an OpenAI credential after OpenCode refreshes it, and the
+  pace colours away from green.
+- **No email for real OpenAI tokens.** Both real access tokens lacked the claim, so OpenAI rows
+  show only their label, and a legacy-imported one reads `OAuth`. The README could tell users to
+  rename it in `/connect` (`ctrl+r`); whether a credential's `metadata` carries an email is
+  unchecked, and would need checking without printing values.
+- **The migrated `"opencode-swap"` plugin entry** (On a real installation). Every 0.4.x user
+  with the plugin enabled in `tui.json` gets it in `cli.json`, next to whatever
+  `@leinardi/opencode-swap` spec they had; with `@0.4` (as the 0.4.x README says), the first
+  load fails and the unrelated npm package is installed. The README's migration steps now say to
+  fix `cli.json` before the first start. Worth more: `migrate-to-opencode2` in 0.4.7 printing
+  the same warning, and an OpenCode issue to migrate `plugin_enabled` ids as enable-only.
 - **New screenshots** of the OpenCode 2 footer and `/swap` picker, with real usage, to replace
   `assets/` and go back into the README.
 - **The `maint/0.4` release flow** in `docs/releasing.md` (a hand-pushed `tui-v0.4.N` tag, the
