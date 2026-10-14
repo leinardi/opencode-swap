@@ -44,6 +44,7 @@ import re
 import subprocess
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from opencode_swap.exceptions import MigrationError, SchemaError
 from opencode_swap.models import AuthRecord, JsonObject
@@ -71,6 +72,15 @@ _VALUE_FIELDS = {
 }
 _ENTRY_FIELDS = {"id", "integrationID", "label", "active", "value"}
 _VERSION_PATTERN = re.compile(r"(\d+)\.(\d+)\.(\d+)")
+
+# On its first config load OpenCode 2 builds cli.json from OpenCode 1's tui.json, turning every
+# `plugin_enabled` id into a bare `plugins` entry (packages/cli/src/config/migrate.ts:37,100-117,
+# 160-166 in 2.0.29). A bare "opencode-swap" only enables an already loaded plugin with that id;
+# otherwise OpenCode installs it from npm (packages/tui/src/plugin/context.tsx:318-350), where
+# "opencode-swap" is an unrelated package. The 0.4.x plugin never loads on OpenCode 2, so a
+# migrated config installs and runs that package. Seen on a real upgrade from 1.19 to 2.0.29.
+PLUGIN_CONFIG_FILES = ("tui.json", "cli.json")
+PLUGIN_NAME = "opencode-swap"
 
 
 # --- mapping ---------------------------------------------------------------
@@ -258,6 +268,25 @@ def parse_destination(text: str) -> list[DestinationCredential]:
         value = _parse_value(entry["value"], what)
         result.append(DestinationCredential(entry["id"], entry["integrationID"], entry["label"], entry["active"], value))
     return result
+
+
+def plugin_config_files(config_dirs: Iterable[Path]) -> list[Path]:
+    """The OpenCode config files that mention the opencode-swap plugin.
+
+    A plain text search, not a parse: it only decides whether to print a
+    warning, and tui.json may hold comments a JSON parser would refuse.
+    """
+    found: list[Path] = []
+    for directory in config_dirs:
+        for name in PLUGIN_CONFIG_FILES:
+            path = directory / name
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            if PLUGIN_NAME in text and path not in found:
+                found.append(path)
+    return found
 
 
 def parse_version(text: str) -> tuple[int, int, int]:

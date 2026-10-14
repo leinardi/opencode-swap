@@ -833,6 +833,38 @@ def _stdout_unsafe_for_credentials() -> str | None:
     return "a file" if stat.S_ISREG(mode) else "a device"
 
 
+def _report_migration(plan: opencode2.MigrationPlan, output: Path | None) -> None:
+    """Print what migrate-to-opencode2 exported and what to do next; never a credential."""
+    count = len(plan.entries)
+    print(
+        f"Exported {count} account{'s' if count != 1 else ''} for OpenCode 2:" if count else "Nothing new to export for OpenCode 2.", file=sys.stderr
+    )
+    for line in plan.exported:
+        print(f"  {line}", file=sys.stderr)
+    for line in plan.notes:
+        print(f"note: {line}", file=sys.stderr)
+    for line in plan.warnings:
+        print(f"warning: {line}", file=sys.stderr)
+    for config in opencode2.plugin_config_files(paths.get_opencode_config_dirs()):
+        print(
+            f"warning: {config} lists the opencode-swap plugin, which is discontinued and never loads on OpenCode 2. "
+            "Remove it before OpenCode 2 first starts: '@leinardi/opencode-swap' from \"plugin\" and 'opencode-swap' from "
+            '"plugin_enabled" in tui.json, and both from "plugins" in cli.json. OpenCode 2 copies tui.json\'s plugins into '
+            "cli.json, and installs npm's unrelated 'opencode-swap' package when the plugin fails to load.",
+            file=sys.stderr,
+        )
+    if count:
+        if output is not None:
+            print(f"Import with: opencode auth import {output}", file=sys.stderr)
+        print(
+            "Stop OpenCode 1 before importing. After importing, don't switch accounts with opencode-swap 0.4.x: "
+            "the vault and OpenCode 2 hold the same refresh tokens, and a refresh by either spends the other's copy.",
+            file=sys.stderr,
+        )
+    if output is not None:
+        print(f"{output} holds credentials in plain text: delete it once the import succeeded.", file=sys.stderr)
+
+
 def cmd_migrate_to_opencode2(switcher: Switcher, args: argparse.Namespace) -> int:
     output = Path(args.output).expanduser() if args.output else None
     unsafe = _stdout_unsafe_for_credentials() if output is None else None
@@ -860,26 +892,7 @@ def cmd_migrate_to_opencode2(switcher: Switcher, args: argparse.Namespace) -> in
         sys.stdout.buffer.write(payload)
         sys.stdout.flush()
 
-    count = len(plan.entries)
-    print(
-        f"Exported {count} account{'s' if count != 1 else ''} for OpenCode 2:" if count else "Nothing new to export for OpenCode 2.", file=sys.stderr
-    )
-    for line in plan.exported:
-        print(f"  {line}", file=sys.stderr)
-    for line in plan.notes:
-        print(f"note: {line}", file=sys.stderr)
-    for line in plan.warnings:
-        print(f"warning: {line}", file=sys.stderr)
-    if count:
-        if output is not None:
-            print(f"Import with: opencode auth import {output}", file=sys.stderr)
-        print(
-            "Stop OpenCode 1 before importing. After importing, don't switch accounts with opencode-swap 0.4.x: "
-            "the vault and OpenCode 2 hold the same refresh tokens, and a refresh by either spends the other's copy.",
-            file=sys.stderr,
-        )
-    if output is not None:
-        print(f"{output} holds credentials in plain text: delete it once the import succeeded.", file=sys.stderr)
+    _report_migration(plan, output)
     return 0
 
 

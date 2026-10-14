@@ -53,6 +53,9 @@ def isolated_env(tmp_path, monkeypatch):
     secret backend is forced, no OpenCode process is seen, and any network
     call fails the test."""
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    # OpenCode's config dir too: migrate-to-opencode2 reads tui.json and cli.json there.
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.delenv("OPENCODE_CONFIG_DIR", raising=False)
     monkeypatch.delenv("OPENCODE_AUTH_CONTENT", raising=False)
     monkeypatch.setattr(Platform, "detect", classmethod(lambda cls: Platform.UNKNOWN))
     monkeypatch.setattr(process_detection, "is_opencode_running", lambda: False)
@@ -724,3 +727,58 @@ def test_stdout_pipe_receives_the_credentials(tmp_path, capsys, fake_opencode, m
 
     assert code == 0
     assert len(entries) == 3
+
+
+# --- the 0.4.x plugin in OpenCode's config ---------------------------------
+
+
+def write_config(tmp_path, name, text):
+    path = tmp_path / "config" / "opencode" / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+    return path
+
+
+@pytest.mark.parametrize(
+    ("name", "text"),
+    [
+        # What 0.4.x's install instructions produce, and what OpenCode 2 copies it into.
+        ("tui.json", '{\n  // comments are fine\n  "plugin": ["@leinardi/opencode-swap@0.4"],\n  "plugin_enabled": {"opencode-swap": true}\n}\n'),
+        ("cli.json", '{"plugins": ["@leinardi/opencode-swap", "opencode-swap"]}\n'),
+    ],
+)
+def test_a_config_listing_the_plugin_gets_a_warning(tmp_path, capsys, fake_opencode, name, text):
+    build_vault(tmp_path)
+    config = write_config(tmp_path, name, text)
+
+    code, out, err = run_cli(tmp_path, capsys)
+
+    assert code == 0
+    assert len(json.loads(out)) == 3
+    assert f"warning: {config} lists the opencode-swap plugin" in err
+    assert "installs npm's unrelated 'opencode-swap' package" in err
+    assert config.read_text() == text, "the config is only read, never changed"
+
+
+def test_a_config_without_the_plugin_gets_no_warning(tmp_path, capsys, fake_opencode):
+    build_vault(tmp_path)
+    write_config(tmp_path, "tui.json", '{"plugin": ["some-other-plugin"]}\n')
+    write_config(tmp_path, "cli.json", "not even json")
+
+    code, _, err = run_cli(tmp_path, capsys)
+
+    assert code == 0
+    assert "lists the opencode-swap plugin" not in err
+
+
+def test_opencode_config_dir_override_is_checked_as_well(tmp_path, capsys, fake_opencode, monkeypatch):
+    build_vault(tmp_path)
+    override = tmp_path / "custom-config"
+    override.mkdir()
+    (override / "cli.json").write_text('{"plugins": ["opencode-swap"]}\n')
+    monkeypatch.setenv("OPENCODE_CONFIG_DIR", str(override))
+
+    code, _, err = run_cli(tmp_path, capsys)
+
+    assert code == 0
+    assert f"warning: {override / 'cli.json'} lists the opencode-swap plugin" in err

@@ -42,6 +42,9 @@ def isolated_env(tmp_path, monkeypatch):
     so CLI tests never touch the real OpenCode auth.json or the real OS
     macOS Keychain."""
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    # OpenCode's config dir too: migrate-to-opencode2 reads tui.json and cli.json there.
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.delenv("OPENCODE_CONFIG_DIR", raising=False)
     monkeypatch.delenv("OPENCODE_AUTH_CONTENT", raising=False)
     monkeypatch.setattr(Platform, "detect", classmethod(lambda cls: Platform.UNKNOWN))
     monkeypatch.setattr(process_detection, "is_opencode_running", lambda: False)
