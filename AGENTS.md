@@ -124,18 +124,85 @@ Read these two first — most "obvious" changes wrong without context:
 ## Commit messages
 
 All commits MUST be Conventional Commits 1.0.0 **with a scope**:
-`<type>(<scope>)[!]: <description>`. Enforced by the `conventional-pre-commit`
-`commit-msg` hook (`--force-scope`, installed by `make pre-commit-install`)
-and by the `conventional-commits` CI job. Breaking changes use `!` before `:`
-or a `BREAKING CHANGE:` footer. Example: `fix(auth): keep the rotated refresh
+`<type>(<scope>)[!]: <description>`, optional blank-line body and footers.
+Enforced by the `conventional-pre-commit` `commit-msg` hook (`--force-scope`,
+installed by `make pre-commit-install`) and by the `conventional-commits` CI
+job. Types: `feat`, `fix`, `docs`, `test`, `refactor`, `perf`, `build`, `ci`,
+`chore`, `style`, `revert`. Breaking changes use `!` before `:` or a
+`BREAKING CHANGE:` footer. Example: `fix(auth): keep the rotated refresh
 token on a self-switch`.
 
-A release with no explicit version is derived by commitizen from the commits
-since the last `v<version>` tag, so a wrong type ships a wrong version: `feat`
-is a minor; `fix`, `perf` and `refactor` a patch; `build`, `chore`, `ci`,
-`docs`, `revert`, `style` and `test` nothing. Bump table:
-`CONTRIBUTING.md#versioning`. PRs land as merge commits, so every commit
-counts, not just the PR title.
+A release with no explicit version is derived by commitizen (`cz bump
+--get-next` in `release.yaml`) from the commits since the last `v<version>`
+tag, so a wrong type ships a wrong version:
+
+| Release | Commit | Example |
+| --- | --- | --- |
+| major | any type with `!` before the colon, or a `BREAKING CHANGE:` footer (also from 0.x) | `feat(cli)!: rename the export command` |
+| minor | `feat` | `feat(providers): add the xai OAuth record` |
+| patch | `fix`, `perf`, `refactor` | `fix(auth): keep the rotated refresh token` |
+| none | `build`, `chore`, `ci`, `docs`, `revert`, `style`, `test` | `ci(ci): add the ci-result job` |
+
+The highest bump among the commits wins; with only "none" commits since the
+last tag, a release with no version fails with "nothing to bump". Bump table
+and details: `CONTRIBUTING.md#versioning`.
+
+**Pick the type by whether the change should ship, not by what kind of change
+it is.** What ships is the CLI on PyPI and the TUI plugin on npm. A change
+users should receive is `fix` (or `feat`). `perf` and `refactor` bump a patch
+under commitizen, so never use them for a change that ships nothing (CI,
+docs, tests, tooling): type that `ci`, `docs`, `test`, `build` or `chore`. A
+`revert` bumps nothing, so a revert of a shipped `feat` or `fix` is itself a
+`fix`. A comment-only change to a shipped file (a licence header, a typo) may
+be `docs` or `chore`.
+
+commitizen reads **every line** of every commit message, merge commits
+included, and counts a line that starts with a word, an optional scope and a
+colon when the word begins with `feat`, `fix`, `refactor` or `perf`. So a body
+line such as `fixtures: ...` or `performance: ...` bumps a patch, and so does
+a pull request title typed `fix(...)`: GitHub writes the title into the merge
+commit's body. PRs land as merge commits, so every commit counts, and so does
+the PR title.
+
+## Validation matrix
+
+Run before considering an edit done. `make check` applies to every row.
+
+| You edited | Run |
+| --- | --- |
+| `src/**/*.py`, `tests/**` | `uv run pytest -q` |
+| `pyproject.toml`, `uv.lock` | `uv run pytest -q`, then `make python-build` |
+| `integrations/opencode-tui-plugin/**` | `make tui-plugin-typecheck tui-plugin-lint tui-plugin-package-check tui-plugin-entry-check tui-plugin-npm-resolve-check` |
+| `scripts/check-npm-resolution.sh`, `scripts/check-tui-entry-compiled.sh` | `make tui-plugin-npm-resolve-check tui-plugin-entry-check`; break what each guards once and see it fail |
+| `scripts/check-license-headers.sh`, `tests/test_license_headers.py` | `uv run pytest -q tests/test_license_headers.py`; strip a header once and see the check fail |
+| `.github/workflows/**` | `pre-commit run actionlint --all-files`; release workflows: `docs/releasing.md` |
+| `.pre-commit-config.yaml`, `Makefile`, repo-local `.mk/*.mk` | `make check`, `make help` |
+| `*.md`, `.agents/skills/**` | `make check`: markdownlint holds prose to 100 columns; tables, code blocks and headings are exempt |
+| a broad change, or merge readiness | `make verify` (what the `verify` CI job runs) |
+
+CI's aggregate check is `ci-result`: it needs `verify`, `pre-commit-all` and
+`conventional-commits`.
+
+## Generated or vendored: never hand-edit
+
+- `uv.lock`: regenerate with `uv lock` after editing `pyproject.toml`.
+- `integrations/opencode-tui-plugin/bun.lock`: regenerate with `bun install`
+  in the plugin directory after editing its `package.json`.
+- `.mk/help.mk`, `.mk/password.mk`, `.mk/pre-commit.mk`,
+  `.mk/.mk-common-version` and `scripts/bootstrap-mk-common.sh`: fetched from
+  `leinardi/make-common` (the Makefile's `MK_COMMON_FILES`); refresh with
+  `make mk-common-update`, and port a change upstream instead.
+
+## License headers
+
+Every tracked Python, shell, TypeScript and JavaScript source, the `Makefile`
+and the repo-local `.mk` fragments carry the MIT header, with the year of the
+file's first commit; a shebang stays on the first line. Copy it from an
+existing file of the same kind, or use the IntelliJ copyright profile in
+`.idea/copyright/`. `scripts/check-license-headers.sh` (an always-run
+pre-commit hook, tested by `tests/test_license_headers.py`) fails on any that
+lacks it. The make-common files above are exempt: they carry make-common's
+own header. YAML, JSON, TOML and Markdown are not governed.
 
 ## Project skills
 

@@ -8,7 +8,10 @@ assignees: []
 ## Step 1: Is this the right place?
 
 * [ ] I have checked the existing issues to confirm this feature has not already been requested.
-* [ ] I have checked the [Scope section of the README](https://github.com/leinardi/opencode-swap#scope) — this request is not load balancing/round-robin, a runtime proxy, Windows support, or reimplementing/modifying OpenCode itself.
+* [ ] I have checked the
+  [Scope section of the README](https://github.com/leinardi/opencode-swap#scope) — this request is
+  not load balancing/round-robin, a runtime proxy, Windows support, or reimplementing/modifying
+  OpenCode itself.
 * [ ] I believe this feature fits the scope and goals of this project.
 
 ---

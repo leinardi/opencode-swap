@@ -262,17 +262,28 @@ shells out to it rather than a separate GUI.
 
 ## Documentation
 
-- [`docs/architecture.md`](https://github.com/leinardi/opencode-swap/blob/main/docs/architecture.md): module map, data flow, the switch algorithm, transaction/rollback design.
-- [`docs/opencode-auth.md`](https://github.com/leinardi/opencode-swap/blob/main/docs/opencode-auth.md): how OpenCode stores provider credentials and refreshes OpenAI credentials.
-- [`docs/provider-support.md`](https://github.com/leinardi/opencode-swap/blob/main/docs/provider-support.md): provider matrix, source evidence, live-testing status, and deferred OAuth cases.
-- [`docs/provider-research-prompt.md`](https://github.com/leinardi/opencode-swap/blob/main/docs/provider-research-prompt.md): safe copy-paste prompt for provider-research issues.
-- [`docs/security.md`](https://github.com/leinardi/opencode-swap/blob/main/docs/security.md): threat model, storage mechanism comparison, what's explicitly out of scope.
-- [`docs/testing.md`](https://github.com/leinardi/opencode-swap/blob/main/docs/testing.md): testing strategy and how to run the suite.
-- [`docs/roadmap.md`](https://github.com/leinardi/opencode-swap/blob/main/docs/roadmap.md): what v1 ships and the known gaps.
-- [`docs/releasing.md`](https://github.com/leinardi/opencode-swap/blob/main/docs/releasing.md): how to cut a CLI (PyPI) or TUI plugin (npm) release.
-- [`AGENTS.md`](https://github.com/leinardi/opencode-swap/blob/main/AGENTS.md): project guide for AI coding agents working in this repo.
-- [`CONTRIBUTING.md`](https://github.com/leinardi/opencode-swap/blob/main/CONTRIBUTING.md): how to set up, test, and submit changes.
-- [`SECURITY.md`](https://github.com/leinardi/opencode-swap/blob/main/SECURITY.md): how to report a vulnerability.
+- [`docs/architecture.md`](https://github.com/leinardi/opencode-swap/blob/main/docs/architecture.md):
+  module map, data flow, the switch algorithm, transaction/rollback design.
+- [`docs/opencode-auth.md`](https://github.com/leinardi/opencode-swap/blob/main/docs/opencode-auth.md):
+  how OpenCode stores provider credentials and refreshes OpenAI credentials.
+- [`docs/provider-support.md`](https://github.com/leinardi/opencode-swap/blob/main/docs/provider-support.md):
+  provider matrix, source evidence, live-testing status, and deferred OAuth cases.
+- [`docs/provider-research-prompt.md`](https://github.com/leinardi/opencode-swap/blob/main/docs/provider-research-prompt.md):
+  safe copy-paste prompt for provider-research issues.
+- [`docs/security.md`](https://github.com/leinardi/opencode-swap/blob/main/docs/security.md): threat
+  model, storage mechanism comparison, what's explicitly out of scope.
+- [`docs/testing.md`](https://github.com/leinardi/opencode-swap/blob/main/docs/testing.md): testing
+  strategy and how to run the suite.
+- [`docs/roadmap.md`](https://github.com/leinardi/opencode-swap/blob/main/docs/roadmap.md): what v1
+  ships and the known gaps.
+- [`docs/releasing.md`](https://github.com/leinardi/opencode-swap/blob/main/docs/releasing.md): how
+  to cut a CLI (PyPI) or TUI plugin (npm) release.
+- [`AGENTS.md`](https://github.com/leinardi/opencode-swap/blob/main/AGENTS.md): project guide for AI
+  coding agents working in this repo.
+- [`CONTRIBUTING.md`](https://github.com/leinardi/opencode-swap/blob/main/CONTRIBUTING.md): how to
+  set up, test, and submit changes.
+- [`SECURITY.md`](https://github.com/leinardi/opencode-swap/blob/main/SECURITY.md): how to report a
+  vulnerability.
 
 ## Development
 

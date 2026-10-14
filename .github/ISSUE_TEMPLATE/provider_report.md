@@ -31,7 +31,8 @@ ever exposing a credential.
 
 ## Commands run
 
-<!-- e.g. `opencode-swap add <provider> <name>`, `opencode-swap list --usage`, `opencode-swap doctor` -->
+<!-- e.g. `opencode-swap add <provider> <name>`, `opencode-swap list --usage`,
+`opencode-swap doctor` -->
 
 ```text
 $
